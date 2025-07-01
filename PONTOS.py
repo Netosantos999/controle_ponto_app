@@ -201,7 +201,7 @@ elif aba == "Gerenciar Colaboradores":
         st.markdown("Preencha os campos abaixo para adicionar um novo colaborador.")
         with st.form("form_add_colaborador", clear_on_submit=True):
             nome_novo = st.text_input("Nome completo", placeholder="Ex: João da Silva").strip()
-            funcao_novo = st.text_input("Função", placeholder="Ex: Analista").strip()
+            funcao_novo = st.text_input("Função", placeholder="Ex: Pedreiro").strip()
             submitted_add = st.form_submit_button("Adicionar Colaborador")
 
             if submitted_add:

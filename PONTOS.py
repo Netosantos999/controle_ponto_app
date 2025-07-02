@@ -167,7 +167,10 @@ aba = st.sidebar.radio("Navegação", ["Registrar Ponto", "Gerenciar Colaborador
 
 if aba == "Registrar Ponto":
     st.header("Registro de Ponto")
-    st.markdown("Selecione o seu nome e registre a sua entrada ou saída.")
+    st.markdown("Informe manualmente a data e hora da entrada. O sistema registrará automaticamente:")
+    st.markdown("- Pausa às 12:00")
+    st.markdown("- Retorno às 13:00")
+    st.markdown("- Saída às 17:00 (segunda a quinta) ou 16:00 (sexta)")
 
     df_colab = carregar_colaboradores()
     nomes = [""] + df_colab["Nome"].tolist()
@@ -177,70 +180,42 @@ if aba == "Registrar Ponto":
             "**Selecione seu nome:**",
             nomes,
             key="ponto_nome_select",
-            help="Escolha seu nome para registrar uma ação."
+            help="Escolha seu nome para registrar o ponto."
         )
 
         if nome_selecionado:
             st.write(f"Colaborador selecionado: **{nome_selecionado}**")
 
-            usar_manual = st.checkbox("Usar data e hora manualmente")
-
-            if usar_manual:
-                data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")
-                hora_input = st.text_input("Hora do Registro (HH:MM):", value=datetime.now().strftime("%H:%M"), key="hora_input_manual")
-            else:
-                data_input = datetime.today()
-                hora_input = datetime.now().strftime("%H:%M")
+            data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")
+            hora_input = st.text_input("Hora da Entrada (HH:MM):", placeholder="Ex: 08:00", key="hora_input_manual")
 
             col1, col2 = st.columns(2)
 
             try:
-                datetime.strptime(hora_input, "%H:%M")  # Validação do formato
+                datetime.strptime(hora_input, "%H:%M")  # Valida formato
                 data_str = data_input.strftime("%Y-%m-%d")
                 hora_str = hora_input.strip()
 
                 if col1.button("Registrar Entrada", use_container_width=True):
-                    # Registrar entrada
                     registrar_evento(nome_selecionado, "Entrada", data_str, hora_str)
+                    registrar_evento(nome_selecionado, "Pausa", data_str, "12:00")
+                    registrar_evento(nome_selecionado, "Retorno", data_str, "13:00")
 
-                    # Registrar pausa fixa às 12:00
-                    registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
+                    dia_semana = datetime.strptime(data_str, "%Y-%m-%d").weekday()
+                    hora_saida = "16:00" if dia_semana == 4 else "17:00"
 
-                    # Registrar retorno fixo às 13:00
-                    registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
-
-                    # Verificar dia da semana para saída automática
-                    dia_semana = datetime.strptime(data_str, "%Y-%m-%d").weekday()  # 0 = segunda, 4 = sexta
-
-                    if dia_semana == 4:  # Sexta-feira
-                        hora_saida_auto = "16:00"
-                    else:  # Segunda a quinta
-                        hora_saida_auto = "17:00"
-
-                    # Registrar saída automática
-                    registrar_evento(nome_selecionado, "Saída", data_str, hora_saida_auto)
+                    registrar_evento(nome_selecionado, "Saída", data_str, hora_saida)
 
                     st.success(
                         f"Entrada registrada às {hora_str}, pausa às 12:00, retorno às 13:00 "
-                        f"e saída automática às {hora_saida_auto} em {data_str}."
+                        f"e saída às {hora_saida} em {data_str}."
                     )
 
-                #if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
-                    #if usar_manual:
-                        #registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
-                        #registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
-                        #registrar_evento(nome_selecionado, "Saída", data_str=data_str, hora_str=hora_str)
-                        #st.success(f"Saída registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
-                        #st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
-                    #else:
-                        #hora_saida = registrar_saida_com_almoco(nome_selecionado)
-                        #st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
-                        #st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
+                
             except ValueError:
-                st.error("Formato de hora inválido. Use o formato HH:MM.")
+                st.error("Use o formato HH:MM.")
         else:
-            st.warning("Por favor, selecione um nome para registrar o ponto.")
-
+            st.warning("Por favor, selecione um nome.")
 
 
 

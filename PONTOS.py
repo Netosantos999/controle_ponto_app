@@ -404,3 +404,26 @@ elif aba == "Ajustar Ponto":
                     st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
+
+# baixar relatorios
+
+st.markdown("---")
+st.subheader("📥 Baixar Arquivos CSV")
+
+df_csv_registros = carregar_pontos()
+df_csv_colaboradores = carregar_colaboradores()
+
+st.download_button(
+    label="⬇️ Baixar Registros de Ponto (registro_ponto.csv)",
+    data=df_csv_registros.to_csv(index=False).encode('utf-8'),
+    file_name='registro_ponto.csv',
+    mime='text/csv'
+)
+
+st.download_button(
+    label="⬇️ Baixar Lista de Colaboradores (colaboradores.csv)",
+    data=df_csv_colaboradores.to_csv(index=False).encode('utf-8'),
+    file_name='colaboradores.csv',
+    mime='text/csv'
+)
+

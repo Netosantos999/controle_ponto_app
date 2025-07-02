@@ -183,7 +183,6 @@ if aba == "Registrar Ponto":
         if nome_selecionado:
             st.write(f"Colaborador selecionado: **{nome_selecionado}**")
 
-            # Checkbox para ativar o uso manual de data e hora
             usar_manual = st.checkbox("Usar data e hora manualmente")
 
             if usar_manual:
@@ -206,8 +205,11 @@ if aba == "Registrar Ponto":
 
                 if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
                     if usar_manual:
-                        registrar_evento(nome_selecionado, "Saída", data_str, hora_str)
+                        registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
+                        registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
+                        registrar_evento(nome_selecionado, "Saída", data_str=data_str, hora_str=hora_str)
                         st.success(f"Saída registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
+                        st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
                     else:
                         hora_saida = registrar_saida_com_almoco(nome_selecionado)
                         st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
@@ -216,6 +218,7 @@ if aba == "Registrar Ponto":
                 st.error("Formato de hora inválido. Use o formato HH:MM.")
         else:
             st.warning("Por favor, selecione um nome para registrar o ponto.")
+
 
 #fim da mudança para que o usuario possa escolher a hora e data ou não
 
@@ -315,6 +318,8 @@ elif aba == "Relatórios":
         st.dataframe(df_dia.sort_values(by=["Nome", "Hora"]), use_container_width=True)
     else:
         st.info("Nenhum registro encontrado para a data e filtro selecionados.")
+
+
 
     st.markdown("---")
     st.subheader("Cálculo de Horas Trabalhadas")

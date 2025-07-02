@@ -163,13 +163,15 @@ st.markdown("Sistema para registro e gerenciamento de ponto dos colaboradores.")
 
 aba = st.sidebar.radio("Navegação", ["Registrar Ponto", "Gerenciar Colaboradores", "Relatórios", "Ajustar Ponto"])
 
+#inicio da mudança para que o usuario possa escolher a hora e data ou não
+
 if aba == "Registrar Ponto":
     st.header("Registro de Ponto")
     st.markdown("Selecione o seu nome e registre a sua entrada ou saída.")
 
     df_colab = carregar_colaboradores()
     nomes = [""] + df_colab["Nome"].tolist()
-    
+
     with st.container(border=True):
         nome_selecionado = st.selectbox(
             "**Selecione seu nome:**",
@@ -180,18 +182,42 @@ if aba == "Registrar Ponto":
 
         if nome_selecionado:
             st.write(f"Colaborador selecionado: **{nome_selecionado}**")
-            col1, col2 = st.columns(2)
-            
-            if col1.button("Registrar Entrada", use_container_width=True):
-                registrar_evento(nome_selecionado, "Entrada")
-                st.success(f"Entrada registrada para **{nome_selecionado}** às {datetime.now().strftime('%H:%M')}.")
 
-            if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
-                hora_saida = registrar_saida_com_almoco(nome_selecionado)
-                st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
-                st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
+            # Checkbox para ativar o uso manual de data e hora
+            usar_manual = st.checkbox("Usar data e hora manualmente")
+
+            if usar_manual:
+                data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")
+                hora_input = st.text_input("Hora do Registro (HH:MM):", value=datetime.now().strftime("%H:%M"), key="hora_input_manual")
+            else:
+                data_input = datetime.today()
+                hora_input = datetime.now().strftime("%H:%M")
+
+            col1, col2 = st.columns(2)
+
+            try:
+                datetime.strptime(hora_input, "%H:%M")  # Validação
+                data_str = data_input.strftime("%Y-%m-%d")
+                hora_str = hora_input.strip()
+
+                if col1.button("Registrar Entrada", use_container_width=True):
+                    registrar_evento(nome_selecionado, "Entrada", data_str, hora_str)
+                    st.success(f"Entrada registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
+
+                if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
+                    if usar_manual:
+                        registrar_evento(nome_selecionado, "Saída", data_str, hora_str)
+                        st.success(f"Saída registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
+                    else:
+                        hora_saida = registrar_saida_com_almoco(nome_selecionado)
+                        st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
+                        st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
+            except ValueError:
+                st.error("Formato de hora inválido. Use o formato HH:MM.")
         else:
             st.warning("Por favor, selecione um nome para registrar o ponto.")
+
+#fim da mudança para que o usuario possa escolher a hora e data ou não
 
 elif aba == "Gerenciar Colaboradores":
     st.header("Gerenciamento de Colaboradores")

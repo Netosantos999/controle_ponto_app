@@ -195,29 +195,53 @@ if aba == "Registrar Ponto":
             col1, col2 = st.columns(2)
 
             try:
-                datetime.strptime(hora_input, "%H:%M")  # Validação
+                datetime.strptime(hora_input, "%H:%M")  # Validação do formato
                 data_str = data_input.strftime("%Y-%m-%d")
                 hora_str = hora_input.strip()
 
                 if col1.button("Registrar Entrada", use_container_width=True):
+                    # Registrar entrada
                     registrar_evento(nome_selecionado, "Entrada", data_str, hora_str)
-                    st.success(f"Entrada registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
 
-                if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
-                    if usar_manual:
-                        registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
-                        registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
-                        registrar_evento(nome_selecionado, "Saída", data_str=data_str, hora_str=hora_str)
-                        st.success(f"Saída registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
-                        st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
-                    else:
-                        hora_saida = registrar_saida_com_almoco(nome_selecionado)
-                        st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
-                        st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
+                    # Registrar pausa fixa às 12:00
+                    registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
+
+                    # Registrar retorno fixo às 13:00
+                    registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
+
+                    # Verificar dia da semana para saída automática
+                    dia_semana = datetime.strptime(data_str, "%Y-%m-%d").weekday()  # 0 = segunda, 4 = sexta
+
+                    if dia_semana == 4:  # Sexta-feira
+                        hora_saida_auto = "16:00"
+                    else:  # Segunda a quinta
+                        hora_saida_auto = "17:00"
+
+                    # Registrar saída automática
+                    registrar_evento(nome_selecionado, "Saída", data_str, hora_saida_auto)
+
+                    st.success(
+                        f"Entrada registrada às {hora_str}, pausa às 12:00, retorno às 13:00 "
+                        f"e saída automática às {hora_saida_auto} em {data_str}."
+                    )
+
+                #if col2.button("Registrar Saída", use_container_width=True, help="Registra a saída e o intervalo de almoço padrão (12:00-13:00)."):
+                    #if usar_manual:
+                        #registrar_evento(nome_selecionado, "Pausa", data_str=data_str, hora_str="12:00")
+                        #registrar_evento(nome_selecionado, "Retorno", data_str=data_str, hora_str="13:00")
+                        #registrar_evento(nome_selecionado, "Saída", data_str=data_str, hora_str=hora_str)
+                        #st.success(f"Saída registrada para **{nome_selecionado}** às {hora_str} em {data_str}.")
+                        #st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
+                    #else:
+                        #hora_saida = registrar_saida_com_almoco(nome_selecionado)
+                        #st.success(f"Saída registrada para **{nome_selecionado}** às {hora_saida}.")
+                        #st.info("O intervalo de almoço (12:00 - 13:00) foi registrado automaticamente.")
             except ValueError:
                 st.error("Formato de hora inválido. Use o formato HH:MM.")
         else:
             st.warning("Por favor, selecione um nome para registrar o ponto.")
+
+
 
 
 #fim da mudança para que o usuario possa escolher a hora e data ou não

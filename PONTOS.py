@@ -405,7 +405,7 @@ elif aba == "Ajustar Ponto":
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
 
-# baixar relatorios
+# aquii
 
 st.markdown("---")
 st.subheader("📥 Baixar Arquivos CSV")

@@ -3,14 +3,15 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 
+
 # --- Configurações do Aplicativo ---
 st.set_page_config(
     page_title="Controle de Ponto",
     layout="centered",
     initial_sidebar_state="expanded",
     menu_items={
-        'Get Help': 'mailto:suporte@suaempresa.com',
-        'Report a bug': 'mailto:suporte@suaempresa.com',
+        'Get Help': 'mailto:francelinotees@gmail.com',
+        'Report a bug': 'mailto:francelinotees@gmail.com',
         'About': '''
             ## Controle de Ponto
             Sistema para registro e gerenciamento de ponto dos colaboradores.
@@ -83,11 +84,43 @@ def registrar_evento(nome, acao, data_str=None, hora_str=None):
         data_str = datetime.now().strftime("%Y-%m-%d")
     if hora_str is None:
         hora_str = datetime.now().strftime("%H:%M")
-        
-    novo_registro = pd.DataFrame([[nome, acao, data_str, hora_str]], columns=["Nome", "Ação", "Data", "Hora"])
+
     df_pontos = carregar_pontos()
+
+    # Verifica duplicata exata
+    duplicado_exato = df_pontos[
+        (df_pontos["Nome"] == nome) &
+        (df_pontos["Ação"] == acao) &
+        (df_pontos["Data"] == data_str) &
+        (df_pontos["Hora"] == hora_str)
+    ]
+
+    if not duplicado_exato.empty:
+        st.warning(f"Registro já existe: {nome} - {acao} em {data_str} às {hora_str}")
+        return False
+
+    # Verifica registros próximos (menos de 1 minuto de diferença)
+    df_mesmo_dia = df_pontos[
+        (df_pontos["Nome"] == nome) &
+        (df_pontos["Ação"] == acao) &
+        (df_pontos["Data"] == data_str)
+    ]
+
+    hora_nova = datetime.strptime(hora_str, "%H:%M")
+    for _, row in df_mesmo_dia.iterrows():
+        try:
+            hora_existente = datetime.strptime(str(row["Hora"])[:5], "%H:%M")
+            diferenca = abs((hora_existente - hora_nova).total_seconds())
+            if diferenca < 60:  # menos de 1 minuto
+                st.warning(f"Registro ignorado: ação semelhante registrada há menos de 1 minuto ({row['Hora']}).")
+                return False
+        except:
+            continue
+
+    novo_registro = pd.DataFrame([[nome, acao, data_str, hora_str]], columns=["Nome", "Ação", "Data", "Hora"])
     df_pontos = pd.concat([df_pontos, novo_registro], ignore_index=True)
     df_pontos.to_csv(ARQ_PONTO, index=False)
+    return True
 
 def registrar_saida_com_almoco(nome):
     data_hoje = datetime.now().strftime("%Y-%m-%d")
@@ -117,42 +150,154 @@ def deletar_ponto(index_para_deletar):
 
 def calcular_horas(df):
     resultado = []
-    for nome in df["Nome"].unique():
-        for data_str in df[df["Nome"] == nome]["Data"].unique():
-            df_dia_nome = df[(df["Nome"] == nome) & (df["Data"] == data_str)].sort_values(by="Hora")
-            
-            tempo_trabalhado = timedelta(0)
-            ultimo_evento_entrada = None
+    df["DataHora"] = pd.to_datetime(df["Data"] + " " + df["Hora"], format="%Y-%m-%d %H:%M")
+    df = df.sort_values(by=["Nome", "DataHora"])
 
-            for _, row in df_dia_nome.iterrows():
-                # --- LINHA CORRIGIDA ---
-                # Garante que a string de hora esteja sempre no formato HH:MM
-                hora_str_processada = str(row["Hora"])
-                if hora_str_processada.count(':') == 2:
-                    # Se a hora tiver segundos (ex: "08:30:00"), remove-os
-                    hora_str_processada = ":".join(hora_str_processada.split(':')[:2])
-                
-                hora_evento = datetime.strptime(hora_str_processada, "%H:%M")
-                # --- FIM DA CORREÇÃO ---
-                
-                if row["Ação"] in ["Entrada", "Retorno"]:
-                    ultimo_evento_entrada = hora_evento
-                elif row["Ação"] in ["Pausa", "Saída"] and ultimo_evento_entrada:
-                    periodo = hora_evento - ultimo_evento_entrada
-                    tempo_trabalhado += periodo
-                    ultimo_evento_entrada = None
+    nomes = df["Nome"].unique()
 
-            if tempo_trabalhado > timedelta(0):
-                total_seconds = int(tempo_trabalhado.total_seconds())
-                hours, remainder = divmod(total_seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
-                formatted_time = f"{int(hours):02}:{int(minutes):02}"
-                resultado.append((nome, data_str, formatted_time))
+    for nome in nomes:
+        df_nome = df[df["Nome"] == nome].sort_values("DataHora").reset_index(drop=True)
+        i = 0
+
+        while i < len(df_nome):
+            row = df_nome.iloc[i]
+            if row["Ação"] == "Entrada":
+                data_entrada = row["Data"]
+                hora_entrada = row["DataHora"]
+
+                # Caso 1: Entrada seguida de Saída (mesmo dia ou virada de turno)
+                if i + 1 < len(df_nome) and df_nome.iloc[i + 1]["Ação"] == "Saída":
+                    hora_saida = df_nome.iloc[i + 1]["DataHora"]
+                    if hora_saida < hora_entrada:
+                        hora_saida += timedelta(days=1)
+
+                    duracao = hora_saida - hora_entrada
+                    total_segundos = int(duracao.total_seconds())
+                    horas, resto = divmod(total_segundos, 3600)
+                    minutos, _ = divmod(resto, 60)
+                    tempo_formatado = f"{int(horas):02}:{int(minutos):02}"
+                    resultado.append((nome, data_entrada, tempo_formatado))
+                    i += 2
+
+                # Caso 2: Entrada → Pausa → Retorno → Saída
+                elif (
+                    i + 3 < len(df_nome) and
+                    df_nome.iloc[i + 1]["Ação"] == "Pausa" and
+                    df_nome.iloc[i + 2]["Ação"] == "Retorno" and
+                    df_nome.iloc[i + 3]["Ação"] == "Saída"
+                ):
+                    h1 = df_nome.iloc[i]["DataHora"]      # Entrada
+                    h2 = df_nome.iloc[i + 1]["DataHora"]  # Pausa
+                    h3 = df_nome.iloc[i + 2]["DataHora"]  # Retorno
+                    h4 = df_nome.iloc[i + 3]["DataHora"]  # Saída
+
+                    periodo1 = h2 - h1
+                    periodo2 = h4 - h3
+                    duracao = periodo1 + periodo2
+
+                    total_segundos = int(duracao.total_seconds())
+                    horas, resto = divmod(total_segundos, 3600)
+                    minutos, _ = divmod(resto, 60)
+                    tempo_formatado = f"{int(horas):02}:{int(minutos):02}"
+                    resultado.append((nome, data_entrada, tempo_formatado))
+                    i += 4
+
+                else:
+                    resultado.append((nome, data_entrada, "Registro Incompleto"))
+                    i += 1
             else:
-                if not df_dia_nome.empty:
-                    resultado.append((nome, data_str, "Registro Incompleto"))
+                i += 1
 
     return pd.DataFrame(resultado, columns=["Nome", "Data", "Horas Trabalhadas"])
+
+# --- FUNÇÕES PARA HORA EXTRA ---
+def formatar_timedelta(td):
+    """Formata um objeto timedelta para uma string 'HH:MM'."""
+    total_segundos = int(td.total_seconds())
+    horas = total_segundos // 3600
+    minutos = (total_segundos % 3600) // 60
+    return f"{horas:02}:{minutos:02}"
+
+def calcular_horas_extras(df_colaborador):
+    """
+    Calcula as horas extras de um colaborador com base nas regras fornecidas.
+    """
+    extras_50 = timedelta()
+    extras_100 = timedelta()
+
+    # Converte para datetime, tratando erros e removendo linhas inválidas
+    df_colaborador["DataHora"] = pd.to_datetime(
+        df_colaborador["Data"] + " " + df_colaborador["Hora"],
+        format="%Y-%m-%d %H:%M",
+        errors='coerce'
+    )
+    df_colaborador = df_colaborador.dropna(subset=["DataHora"])
+    df_colaborador = df_colaborador.sort_values(by="DataHora").reset_index(drop=True)
+
+    i = 0
+    while i < len(df_colaborador):
+        row = df_colaborador.iloc[i]
+        if row["Ação"] == "Entrada":
+            periodos_trabalho = []
+            
+            # Identifica os pares de trabalho
+            if i + 1 < len(df_colaborador) and df_colaborador.iloc[i + 1]["Ação"] == "Saída":
+                periodos_trabalho.append((row["DataHora"], df_colaborador.iloc[i + 1]["DataHora"]))
+                i += 2
+            elif (i + 3 < len(df_colaborador) and
+                  df_colaborador.iloc[i + 1]["Ação"] == "Pausa" and
+                  df_colaborador.iloc[i + 2]["Ação"] == "Retorno" and
+                  df_colaborador.iloc[i + 3]["Ação"] == "Saída"):
+                periodos_trabalho.append((row["DataHora"], df_colaborador.iloc[i + 1]["DataHora"]))
+                periodos_trabalho.append((df_colaborador.iloc[i + 2]["DataHora"], df_colaborador.iloc[i + 3]["DataHora"]))
+                i += 4
+            else:
+                i += 1
+                continue
+
+            for inicio, fim in periodos_trabalho:
+                data_corrente = inicio
+                while data_corrente.date() <= fim.date():
+                    dia_semana = data_corrente.weekday()
+                    
+                    inicio_calculo = max(data_corrente, inicio)
+                    fim_do_dia = pd.to_datetime(data_corrente.date()) + timedelta(days=1)
+                    fim_calculo = min(fim_do_dia, fim)
+
+                    if inicio_calculo >= fim:
+                        break
+                    
+                    duracao_no_dia = fim_calculo - inicio_calculo
+                    
+                    # Regra para Domingo (100%)
+                    if dia_semana == 6:
+                        extras_100 += duracao_no_dia
+                    # Regra para Sábado (50%)
+                    elif dia_semana == 5:
+                        extras_50 += duracao_no_dia
+                    # Regra para Sexta-feira (50% após 16:00)
+                    elif dia_semana == 4:
+                        limite = data_corrente.replace(hour=16, minute=0, second=0, microsecond=0)
+                        if fim_calculo > limite:
+                            inicio_extra = max(inicio_calculo, limite)
+                            extras_50 += (fim_calculo - inicio_extra)
+                    # Regra para Segunda a Quinta (50% após 17:00)
+                    elif 0 <= dia_semana <= 3:
+                        limite = data_corrente.replace(hour=17, minute=0, second=0, microsecond=0)
+                        if fim_calculo > limite:
+                            inicio_extra = max(inicio_calculo, limite)
+                            extras_50 += (fim_calculo - inicio_extra)
+
+                    data_corrente = pd.to_datetime(data_corrente.date() + timedelta(days=1))
+        else:
+            i += 1
+            
+    # Retorna um dicionário com os totais. Removido o de 70% que não é mais usado.
+    return {
+        "50%": extras_50,
+        "100%": extras_100,
+    }
+
 
 # --- Inicialização ---
 inicializar_arquivos()
@@ -163,14 +308,13 @@ st.markdown("Sistema para registro e gerenciamento de ponto dos colaboradores.")
 
 aba = st.sidebar.radio("Navegação", ["Registrar Ponto", "Gerenciar Colaboradores", "Relatórios", "Ajustar Ponto"])
 
-#inicio da mudança para que o usuario possa escolher a hora e data ou não
-
 if aba == "Registrar Ponto":
     st.header("Registro de Ponto")
     st.markdown("Informe manualmente a data e hora da entrada. O sistema registrará automaticamente:")
     st.markdown("- Pausa às 12:00")
     st.markdown("- Retorno às 13:00")
     st.markdown("- Saída às 17:00 (segunda a quinta) ou 16:00 (sexta)")
+    st.markdown("- Os Vigias tem Botões espercificos")
 
     df_colab = carregar_colaboradores()
     nomes = [""] + df_colab["Nome"].tolist()
@@ -192,7 +336,7 @@ if aba == "Registrar Ponto":
             col1, col2 = st.columns(2)
 
             try:
-                datetime.strptime(hora_input, "%H:%M")  # Valida formato
+                datetime.strptime(hora_input, "%H:%M")
                 data_str = data_input.strftime("%Y-%m-%d")
                 hora_str = hora_input.strip()
 
@@ -212,174 +356,252 @@ if aba == "Registrar Ponto":
                     )
 
                 
+                st.markdown("🌙 vigia da noite? Use o botão abaixo para registrar das 18:00 às 06:00 do dia seguinte.")
+
+                if st.button("Registrar Turno Noturno (18:00 - 06:00)", use_container_width=True):
+                    registrar_evento(nome_selecionado, "Entrada", data_str, "18:00")
+
+                    data_saida = (datetime.strptime(data_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    registrar_evento(nome_selecionado, "Saída", data_saida, "06:00")
+
+                    st.success(
+                        f"Turno noturno registrado: entrada às 18:00 em {data_str} e saída às 06:00 em {data_saida}."
+                    )
+
+                st.markdown("🌞 Vigia do dia? Use o botão abaixo para registrar das 06:00 às 18:00 no mesmo dia.")
+
+                if st.button("Registrar Turno Diurno (06:00 - 18:00)", use_container_width=True):
+                   registrar_evento(nome_selecionado, "Entrada", data_str, "06:00")
+                   registrar_evento(nome_selecionado, "Saída", data_str, "18:00")
+                   st.success(
+                     f"Turno diurno registrado: entrada às 06:00 e saída às 18:00 em {data_str}."
+                   )
             except ValueError:
-                st.error("Use o formato HH:MM.")
+                st.error("Horario atual")
         else:
             st.warning("Por favor, selecione um nome.")
 
-
-
-#fim da mudança para que o usuario possa escolher a hora e data ou não
-
 elif aba == "Gerenciar Colaboradores":
-    st.header("Gerenciamento de Colaboradores")
-    st.markdown("Adicione, edite ou remova colaboradores do sistema.")
+    st.header("Gerenciar Colaboradores")
 
-    with st.expander("Adicionar Novo Colaborador", expanded=True):
-        st.markdown("Preencha os campos abaixo para adicionar um novo colaborador.")
-        with st.form("form_add_colaborador", clear_on_submit=True):
-            nome_novo = st.text_input("Nome completo", placeholder="Ex: João da Silva").strip()
-            funcao_novo = st.text_input("Função", placeholder="Ex: Pedreiro").strip()
-            submitted_add = st.form_submit_button("Adicionar Colaborador")
+    df_colab = carregar_colaboradores()
 
-            if submitted_add:
-                if nome_novo and funcao_novo:
-                    if adicionar_colaborador(nome_novo, funcao_novo):
-                        st.success(f"O colaborador **{nome_novo}** ({funcao_novo}) foi adicionado com sucesso.")
-                    else:
-                        st.warning(f"O colaborador '{nome_novo}' já existe. Por favor, utilize um nome diferente.")
+    with st.form("form_add_colaborador"):
+        st.subheader("Adicionar Novo Colaborador")
+        col1, col2 = st.columns(2)
+        nome = col1.text_input("Nome completo")
+        funcao = col2.text_input("Função ou cargo")
+
+        if st.form_submit_button("Adicionar"):
+            if nome.strip():
+                if adicionar_colaborador(nome.strip(), funcao.strip()):
+                    st.success("Colaborador adicionado com sucesso.")
+                    st.rerun()
                 else:
-                    st.error("Por favor, preencha o nome e a função do colaborador.")
-    
-    with st.expander("Editar Colaborador"):
-        st.markdown("Selecione um colaborador para atualizar suas informações.")
-        df_colab = carregar_colaboradores()
-        nomes_existentes = [""] + df_colab["Nome"].tolist()
-        
-        colab_para_editar = st.selectbox("**Selecione o colaborador para editar:**", nomes_existentes, key="edit_select_box_main")
-        
-        if colab_para_editar:
-            with st.form("form_edit_colaborador"):
-                current_info = df_colab[df_colab["Nome"] == colab_para_editar].iloc[0]
-                novo_nome_edit = st.text_input("Novo nome completo", value=current_info["Nome"]).strip()
-                nova_funcao_edit = st.text_input("Nova função", value=current_info["Funcao"]).strip()
-                submitted_edit = st.form_submit_button("Salvar Alterações")
-
-                if submitted_edit:
-                    if editar_colaborador(colab_para_editar, novo_nome_edit, nova_funcao_edit):
-                        st.success(f"Os dados do colaborador **{colab_para_editar}** foram atualizados com sucesso.")
-                        st.rerun()
-                    else:
-                        st.error(f"Não foi possível atualizar: o nome '{novo_nome_edit}' já está em uso.")
-    
-    with st.expander("Remover Colaborador"):
-        st.markdown("Atenção: esta ação não pode ser desfeita.")
-        df_colab_atual = carregar_colaboradores()
-        nomes_para_remover = [""] + df_colab_atual["Nome"].tolist()
-        
-        with st.form("form_remove_colaborador"):
-            nome_remover = st.selectbox("**Selecione o nome para remover:**", nomes_para_remover, key="remove_select_box_form")
-            confirmar = st.checkbox("Confirmo que desejo remover este colaborador permanentemente.")
-            submitted_remove = st.form_submit_button("Remover Colaborador")
-
-            if submitted_remove:
-                if nome_remover and confirmar:
-                    if remover_colaborador(nome_remover):
-                        st.warning(f"O colaborador **{nome_remover}** foi removido do sistema.")
-                        st.rerun()
-                    else:
-                        st.error("Ocorreu um erro ao remover o colaborador.")
-                elif not nome_remover:
-                    st.warning("Por favor, selecione um colaborador.")
-                else:
-                    st.info("É necessário marcar a caixa de confirmação para remover.")
+                    st.warning("Este nome já está cadastrado.")
+            else:
+                st.error("O campo de nome é obrigatório.")
 
     st.markdown("---")
     st.subheader("Lista de Colaboradores")
-    df_colab_final = carregar_colaboradores()
-    if not df_colab_final.empty:
-        st.dataframe(df_colab_final, use_container_width=True)
+
+    if df_colab.empty:
+        st.info("Nenhum colaborador cadastrado.")
     else:
-        st.info("Nenhum colaborador cadastrado no sistema.")
+        funcoes = sorted([f for f in df_colab["Funcao"].dropna().unique() if f])
+        for funcao in funcoes:
+            colab_funcao = df_colab[df_colab["Funcao"] == funcao]
+            st.markdown(f"#### {funcao}")
+
+            for i, row in colab_funcao.iterrows():
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([4, 4, 2])
+                    col1.write(f"Nome: {row['Nome']}")
+                    col2.write(f"Função: {row['Funcao']}")
+                    if col3.button("Excluir", key=f"excluir_{i}", use_container_width=True):
+                        if remover_colaborador(row["Nome"]):
+                            st.warning(f"Colaborador '{row['Nome']}' removido.")
+                            st.rerun()
+
+                with st.expander("Editar"):
+                    col1, col2, col3 = st.columns([4, 4, 2])
+                    novo_nome = col1.text_input("Novo nome", value=row["Nome"], key=f"novo_nome_{i}")
+                    nova_funcao = col2.text_input("Nova função", value=row["Funcao"], key=f"nova_funcao_{i}")
+
+                    if col3.button("Salvar", key=f"salvar_edicao_{i}", use_container_width=True):
+                        if novo_nome.strip():
+                            if editar_colaborador(row["Nome"], novo_nome.strip(), nova_funcao.strip()):
+                                st.success("Dados atualizados com sucesso.")
+                                st.rerun()
+                            else:
+                                st.error("Não foi possível atualizar. Verifique se o novo nome já existe.")
+                        else:
+                            st.error("O nome não pode estar vazio.")
 
 elif aba == "Relatórios":
     st.header("Relatórios de Ponto")
-    st.markdown("Visualize o histórico de ponto e o resumo de horas trabalhadas por data.")
+    st.markdown("Visualize o histórico de ponto, total de horas e baixe os arquivos.")
 
-    st.subheader("Histórico Detalhado por Data")
-    col_date, col_name_report = st.columns([1, 2])
-    with col_date:
-        data_relatorio = st.date_input("Selecione uma data:", datetime.today(), key="rel_date_input")
-    with col_name_report:
-        df_colab_report = carregar_colaboradores()
-        nomes_relatorio = ["Todos"] + df_colab_report["Nome"].tolist()
-        colab_relatorio = st.selectbox("Filtrar por Colaborador:", nomes_relatorio, key="rel_colab_select")
+    df_pontos = carregar_pontos()
+    df_colab = carregar_colaboradores()
 
-    df_pontos_full = carregar_pontos()
-    
-    df_dia = df_pontos_full[df_pontos_full["Data"] == data_relatorio.strftime("%Y-%m-%d")]
-    
-    if colab_relatorio != "Todos":
-        df_dia = df_dia[df_dia["Nome"] == colab_relatorio]
-
-    st.write(f"**Registros de Ponto para {data_relatorio.strftime('%d/%m/%Y')}:**")
-    if not df_dia.empty:
-        st.dataframe(df_dia.sort_values(by=["Nome", "Hora"]), use_container_width=True)
+    if df_pontos.empty or df_colab.empty:
+        st.warning("Sem dados suficientes para gerar relatórios.")
     else:
-        st.info("Nenhum registro encontrado para a data e filtro selecionados.")
+        st.subheader("Total de Horas Trabalhadas por Colaborador")
 
+        nomes_disponiveis = df_colab["Nome"].unique().tolist()
+        colab_filtrado = st.selectbox("Selecionar colaborador:", nomes_disponiveis, key="relatorio_nome_total")
 
+        col1, col2 = st.columns(2)
+        data_inicio = col1.date_input("Data inicial", value=datetime.today().replace(day=1), key="relatorio_inicio")
+        data_fim = col2.date_input("Data final", value=datetime.today(), key="relatorio_fim")
 
-    st.markdown("---")
-    st.subheader("Cálculo de Horas Trabalhadas")
-    st.markdown("As horas são calculadas somando os períodos (Entrada-Pausa) e (Retorno-Saída).")
-    
-    df_horas = calcular_horas(df_pontos_full[df_pontos_full["Data"] == data_relatorio.strftime("%Y-%m-%d")])
-    
-    if colab_relatorio != "Todos":
-        df_horas = df_horas[df_horas["Nome"] == colab_relatorio]
+        df_calculado_completo = calcular_horas(df_pontos[df_pontos["Nome"] == colab_filtrado])
+        df_calculado = df_calculado_completo[
+            (pd.to_datetime(df_calculado_completo["Data"]) >= pd.to_datetime(data_inicio)) &
+            (pd.to_datetime(df_calculado_completo["Data"]) <= pd.to_datetime(data_fim))
+        ]
 
-    if not df_horas.empty:
-        st.dataframe(df_horas, use_container_width=True)
-    else:
-        st.info("Nenhum cálculo de horas disponível para a data e filtro selecionados.")
+        if not df_calculado.empty:
+            st.dataframe(df_calculado, use_container_width=True)
+
+            total_segundos = 0
+            for tempo in df_calculado["Horas Trabalhadas"]:
+                if tempo != "Registro Incompleto":
+                    h, m = map(int, tempo.split(":"))
+                    total_segundos += h * 3600 + m * 60
+
+            horas_total = total_segundos // 3600
+            minutos_total = (total_segundos % 3600) // 60
+
+            st.success(f"Total de horas trabalhadas no período: {horas_total:02}:{minutos_total:02}")
+            
+            st.markdown("---")
+            st.subheader("Cálculo de Horas Extras no Período")
+            
+            funcao_colaborador = df_colab.loc[df_colab["Nome"] == colab_filtrado, "Funcao"].iloc[0]
+            
+            if "vigia" in str(funcao_colaborador).lower():
+                st.info(f"Colaboradores na função de '{funcao_colaborador}' não são elegíveis para horas extras.")
+            else:
+                df_pontos_periodo = df_pontos[
+                    (df_pontos["Nome"] == colab_filtrado) &
+                    (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio)) &
+                    (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
+                ]
+
+                if not df_pontos_periodo.empty:
+                    resultado_extras = calcular_horas_extras(df_pontos_periodo.copy())
+                    
+                    he_50 = resultado_extras.get("50%", timedelta())
+                    he_100 = resultado_extras.get("100%", timedelta())
+                    
+                    # Exibe apenas as colunas de 50% e 100%
+                    col_he1, col_he2 = st.columns(2)
+                    with col_he1:
+                        st.metric(label="Horas Extras (50%)", value=formatar_timedelta(he_50))
+                    with col_he2:
+                        st.metric(label="Horas Extras (100%)", value=formatar_timedelta(he_100))
+                    
+                    # Atualiza o texto com as novas regras
+                    with st.expander("Ver regras de cálculo de Horas Extras"):
+                        st.markdown("""
+                        - **Segunda a Quinta:** Horas trabalhadas após as 17:00 são calculadas a 50%.
+                        - **Sexta-feira:** Horas trabalhadas após as 16:00 são calculadas a 50%.
+                        - **Sábado:** Todas as horas trabalhadas são calculadas a 50%.
+                        - **Domingo:** Todas as horas trabalhadas são calculadas a 100%.
+                        """)
+                else:
+                    st.info("Nenhum registro de ponto encontrado para o cálculo de horas extras neste período.")
+
+        else:
+            st.info("Nenhum registro encontrado no período selecionado.")
+
+        st.markdown("---")
+        st.subheader("Histórico Detalhado por Data")
+
+        col_date, col_name_report = st.columns([1, 2])
+        with col_date:
+            data_relatorio = st.date_input("Selecione uma data:", datetime.today(), key="rel_date_input")
+        with col_name_report:
+            nomes_relatorio = ["Todos"] + df_colab["Nome"].tolist()
+            colab_relatorio = st.selectbox("Filtrar por Colaborador:", nomes_relatorio, key="rel_colab_select")
+
+        df_dia = df_pontos[df_pontos["Data"] == data_relatorio.strftime("%Y-%m-%d")]
+
+        if colab_relatorio != "Todos":
+            df_dia = df_dia[df_dia["Nome"] == colab_relatorio]
+
+        st.write(f"Registros de Ponto para {data_relatorio.strftime('%d/%m/%Y')}:")
+        if not df_dia.empty:
+            st.dataframe(df_dia.sort_values(by=["Nome", "Hora"]), use_container_width=True)
+        else:
+            st.info("Nenhum registro encontrado para a data e filtro selecionados.")
+
+        st.markdown("---")
+        st.subheader("Exportar Registros")
+
+        st.download_button(
+            label="Baixar Registros de Ponto (registro_ponto.csv)",
+            data=df_pontos.to_csv(index=False).encode('utf-8'),
+            file_name='registro_ponto.csv',
+            mime='text/csv'
+        )
+
+        st.download_button(
+            label="Baixar Lista de Colaboradores (colaboradores.csv)",
+            data=df_colab.to_csv(index=False).encode('utf-8'),
+            file_name='colaboradores.csv',
+            mime='text/csv'
+        )
 
 elif aba == "Ajustar Ponto":
     st.header("Ajuste Manual de Ponto")
     st.markdown("Esta ferramenta permite a correção e o ajuste manual dos registros de ponto.")
-    
+
     df_colab_ajuste = carregar_colaboradores()
     nomes_ajuste = [""] + df_colab_ajuste["Nome"].tolist()
-    
+
     col_ajuste_sel, col_ajuste_date = st.columns(2)
     with col_ajuste_sel:
         colab_selecionado = st.selectbox("**Selecione o Colaborador:**", nomes_ajuste, key="ajustar_colab_select_main")
     with col_ajuste_date:
         data_ajuste = st.date_input("**Selecione a Data do Ajuste:**", datetime.today(), key="ajustar_date_input_main")
-    
+
     if colab_selecionado:
         df_pontos = carregar_pontos()
         registros_do_dia = df_pontos[
             (df_pontos["Nome"] == colab_selecionado) & 
             (df_pontos["Data"] == data_ajuste.strftime("%Y-%m-%d"))
         ].sort_values(by="Hora").reset_index()
-        
+
         st.markdown(f"#### Registros para **{colab_selecionado}** em **{data_ajuste.strftime('%d/%m/%Y')}**")
-        
+
         if not registros_do_dia.empty:
             for i, row in registros_do_dia.iterrows():
                 original_index = row['index']
-                
+
                 with st.container(border=True):
                     st.markdown(f"**Registro ID `{original_index}`:**")
                     col_acao, col_data, col_hora = st.columns(3)
-                    
+
                     novo_acao = col_acao.selectbox("Ação", ["Entrada", "Pausa", "Retorno", "Saída"], index=["Entrada", "Pausa", "Retorno", "Saída"].index(row["Ação"]), key=f"ajust_acao_{original_index}")
                     novo_data_str = col_data.text_input("Data (YYYY-MM-DD)", value=row["Data"], key=f"ajust_data_{original_index}").strip()
                     novo_hora_str = col_hora.text_input("Hora (HH:MM)", value=row["Hora"], key=f"ajust_hora_{original_index}").strip()
-                    
+
                     col_update, col_delete = st.columns(2)
                     if col_update.button("Salvar Alterações", use_container_width=True, key=f"update_btn_{original_index}"):
                         try:
                             datetime.strptime(novo_data_str, "%Y-%m-%d")
                             datetime.strptime(novo_hora_str, "%H:%M")
-                            
+
                             if atualizar_ponto(original_index, colab_selecionado, novo_acao, novo_data_str, novo_hora_str):
                                 st.success(f"O registro ID {original_index} foi atualizado com sucesso.")
                                 st.rerun()
                         except ValueError:
                             st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
-                    
+
                     if col_delete.button("Excluir Registro", use_container_width=True, key=f"delete_btn_{original_index}"):
                         if deletar_ponto(original_index):
                             st.warning(f"O registro ID {original_index} foi excluído.")
@@ -391,7 +613,7 @@ elif aba == "Ajustar Ponto":
             acao_manual = col_add_acao.selectbox("Ação", ["Entrada", "Pausa", "Retorno", "Saída"], key="add_manual_acao")
             data_manual_str = col_add_data.text_input("Data (YYYY-MM-DD)", value=data_ajuste.strftime("%Y-%m-%d")).strip()
             hora_manual_str = col_add_hora.text_input("Hora (HH:MM)", value=datetime.now().strftime("%H:%M")).strip()
-            
+
             if st.form_submit_button("Adicionar Registro"):
                 try:
                     datetime.strptime(data_manual_str, "%Y-%m-%d")
@@ -403,26 +625,3 @@ elif aba == "Ajustar Ponto":
                     st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
-
-# aquii
-
-st.markdown("---")
-st.subheader("📥 Baixar Arquivos CSV")
-
-df_csv_registros = carregar_pontos()
-df_csv_colaboradores = carregar_colaboradores()
-
-st.download_button(
-    label="⬇️ Baixar Registros de Ponto (registro_ponto.csv)",
-    data=df_csv_registros.to_csv(index=False).encode('utf-8'),
-    file_name='registro_ponto.csv',
-    mime='text/csv'
-)
-
-st.download_button(
-    label="⬇️ Baixar Lista de Colaboradores (colaboradores.csv)",
-    data=df_csv_colaboradores.to_csv(index=False).encode('utf-8'),
-    file_name='colaboradores.csv',
-    mime='text/csv'
-)
-

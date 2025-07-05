@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import os
-import holidays # <-- 1. IMPORTAÇÃO DA NOVA BIBLIOTECA
+import holidays
 
 # --- Configurações do Aplicativo ---
 st.set_page_config(
@@ -213,8 +213,6 @@ def calcular_horas_extras(df_colaborador):
     extras_50 = timedelta()
     extras_100 = timedelta()
     
-    # <-- 2. LÓGICA DE CÁLCULO ATUALIZADA -->
-    # Cria o objeto de feriados do Brasil uma vez, para eficiência
     br_holidays = holidays.Brazil(state='CE')
 
     df_colaborador["DataHora"] = pd.to_datetime(
@@ -260,22 +258,17 @@ def calcular_horas_extras(df_colaborador):
                     
                     duracao_no_dia = fim_calculo - inicio_calculo
                     
-                    # A VERIFICAÇÃO DE FERIADO VEM PRIMEIRO
                     if data_atual in br_holidays:
                         extras_100 += duracao_no_dia
-                    # Regra para Domingo (100%)
                     elif dia_semana == 6:
                         extras_100 += duracao_no_dia
-                    # Regra para Sábado (50%)
                     elif dia_semana == 5:
                         extras_50 += duracao_no_dia
-                    # Regra para Sexta-feira (50% após 16:00)
                     elif dia_semana == 4:
                         limite = data_corrente.replace(hour=16, minute=0, second=0, microsecond=0)
                         if fim_calculo > limite:
                             inicio_extra = max(inicio_calculo, limite)
                             extras_50 += (fim_calculo - inicio_extra)
-                    # Regra para Segunda a Quinta (50% após 17:00)
                     elif 0 <= dia_semana <= 3:
                         limite = data_corrente.replace(hour=17, minute=0, second=0, microsecond=0)
                         if fim_calculo > limite:
@@ -427,18 +420,64 @@ elif aba == "Relatórios":
     if df_pontos.empty or df_colab.empty:
         st.warning("Sem dados suficientes para gerar relatórios.")
     else:
-        st.subheader("Total de Horas Trabalhadas por Colaborador")
-        nomes_disponiveis = df_colab["Nome"].unique().tolist()
-        colab_filtrado = st.selectbox("Selecionar colaborador:", nomes_disponiveis, key="relatorio_nome_total")
         col1, col2 = st.columns(2)
         data_inicio = col1.date_input("Data inicial", value=datetime.today().replace(day=1), key="relatorio_inicio")
         data_fim = col2.date_input("Data final", value=datetime.today(), key="relatorio_fim")
+
+        st.markdown("---")
+        
+        # --- NOVO BLOCO: RESUMO GERAL DE HORAS EXTRAS ---
+        st.subheader("Resumo Geral de Horas Extras no Período")
+        
+        resumo_extras = []
+        df_pontos_periodo_geral = df_pontos[
+            (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio)) &
+            (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
+        ]
+
+        for _, colaborador in df_colab.iterrows():
+            nome_colab = colaborador["Nome"]
+            funcao_colab = colaborador["Funcao"]
+            
+            if "vigia" in str(funcao_colab).lower():
+                continue
+
+            df_pontos_colaborador = df_pontos_periodo_geral[df_pontos_periodo_geral["Nome"] == nome_colab]
+            
+            if not df_pontos_colaborador.empty:
+                resultado_extras = calcular_horas_extras(df_pontos_colaborador.copy())
+                he_50 = resultado_extras.get("50%", timedelta())
+                he_100 = resultado_extras.get("100%", timedelta())
+
+                if he_50.total_seconds() > 0 or he_100.total_seconds() > 0:
+                    resumo_extras.append({
+                        "Nome": nome_colab,
+                        "Horas Extras (50%)": formatar_timedelta(he_50),
+                        "Horas Extras (100%)": formatar_timedelta(he_100)
+                    })
+        
+        if resumo_extras:
+            df_resumo = pd.DataFrame(resumo_extras)
+            st.dataframe(df_resumo, use_container_width=True)
+        else:
+            st.info("Nenhum colaborador com horas extras encontradas no período selecionado.")
+        
+        st.markdown("---")
+        # --- FIM DO NOVO BLOCO ---
+
+
+        st.subheader("Análise Individual por Colaborador")
+        nomes_disponiveis = df_colab["Nome"].unique().tolist()
+        colab_filtrado = st.selectbox("Selecionar colaborador:", nomes_disponiveis, key="relatorio_nome_total")
+        
         df_calculado_completo = calcular_horas(df_pontos[df_pontos["Nome"] == colab_filtrado])
         df_calculado = df_calculado_completo[
             (pd.to_datetime(df_calculado_completo["Data"]) >= pd.to_datetime(data_inicio)) &
             (pd.to_datetime(df_calculado_completo["Data"]) <= pd.to_datetime(data_fim))
         ]
+        
         if not df_calculado.empty:
+            st.write("**Total de Horas Trabalhadas**")
             st.dataframe(df_calculado, use_container_width=True)
             total_segundos = 0
             for tempo in df_calculado["Horas Trabalhadas"]:
@@ -448,28 +487,25 @@ elif aba == "Relatórios":
             horas_total = total_segundos // 3600
             minutos_total = (total_segundos % 3600) // 60
             st.success(f"Total de horas trabalhadas no período: {horas_total:02}:{minutos_total:02}")
+            
             st.markdown("---")
-            st.subheader("Cálculo de Horas Extras no Período")
+            st.write("**Cálculo de Horas Extras no Período**")
             funcao_colaborador = df_colab.loc[df_colab["Nome"] == colab_filtrado, "Funcao"].iloc[0]
             if "vigia" in str(funcao_colaborador).lower():
                 st.info(f"Colaboradores na função de '{funcao_colaborador}' não são elegíveis para horas extras.")
             else:
-                df_pontos_periodo = df_pontos[
-                    (df_pontos["Nome"] == colab_filtrado) &
-                    (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio)) &
-                    (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
-                ]
-                if not df_pontos_periodo.empty:
-                    resultado_extras = calcular_horas_extras(df_pontos_periodo.copy())
-                    he_50 = resultado_extras.get("50%", timedelta())
-                    he_100 = resultado_extras.get("100%", timedelta())
+                df_pontos_periodo_individual = df_pontos_periodo_geral[df_pontos_periodo_geral["Nome"] == colab_filtrado]
+
+                if not df_pontos_periodo_individual.empty:
+                    resultado_extras_individual = calcular_horas_extras(df_pontos_periodo_individual.copy())
+                    he_50 = resultado_extras_individual.get("50%", timedelta())
+                    he_100 = resultado_extras_individual.get("100%", timedelta())
                     col_he1, col_he2 = st.columns(2)
                     with col_he1:
                         st.metric(label="Horas Extras (50%)", value=formatar_timedelta(he_50))
                     with col_he2:
                         st.metric(label="Horas Extras (100%)", value=formatar_timedelta(he_100))
                     
-                    # <-- 3. TEXTO DAS REGRAS ATUALIZADO -->
                     with st.expander("Ver regras de cálculo de Horas Extras"):
                         st.markdown("""
                         - **Feriados:** Todas as horas trabalhadas são calculadas a 100%.
@@ -479,9 +515,10 @@ elif aba == "Relatórios":
                         - **Segunda a Quinta:** Horas trabalhadas após as 17:00 são calculadas a 50%.
                         """)
                 else:
-                    st.info("Nenhum registro de ponto encontrado para o cálculo de horas extras neste período.")
+                    st.info("Nenhum registro de ponto encontrado para o cálculo de horas extras deste colaborador no período.")
         else:
-            st.info("Nenhum registro encontrado no período selecionado.")
+            st.info("Nenhum registro encontrado para o colaborador no período selecionado.")
+        
         st.markdown("---")
         st.subheader("Histórico Detalhado por Data")
         col_date, col_name_report = st.columns([1, 2])
@@ -490,14 +527,17 @@ elif aba == "Relatórios":
         with col_name_report:
             nomes_relatorio = ["Todos"] + df_colab["Nome"].tolist()
             colab_relatorio = st.selectbox("Filtrar por Colaborador:", nomes_relatorio, key="rel_colab_select")
+        
         df_dia = df_pontos[df_pontos["Data"] == data_relatorio.strftime("%Y-%m-%d")]
         if colab_relatorio != "Todos":
             df_dia = df_dia[df_dia["Nome"] == colab_relatorio]
+        
         st.write(f"Registros de Ponto para {data_relatorio.strftime('%d/%m/%Y')}:")
         if not df_dia.empty:
             st.dataframe(df_dia.sort_values(by=["Nome", "Hora"]), use_container_width=True)
         else:
             st.info("Nenhum registro encontrado para a data e filtro selecionados.")
+        
         st.markdown("---")
         st.subheader("Exportar Registros")
         st.download_button(
@@ -523,23 +563,32 @@ elif aba == "Ajustar Ponto":
         colab_selecionado = st.selectbox("**Selecione o Colaborador:**", nomes_ajuste, key="ajustar_colab_select_main")
     with col_ajuste_date:
         data_ajuste = st.date_input("**Selecione a Data do Ajuste:**", datetime.today(), key="ajustar_date_input_main")
+    
     if colab_selecionado:
-        df_pontos = carregar_pontos()
-        registros_do_dia = df_pontos[
-            (df_pontos["Nome"] == colab_selecionado) & 
-            (df_pontos["Data"] == data_ajuste.strftime("%Y-%m-%d"))
+        df_pontos_ajuste = carregar_pontos()
+        registros_do_dia = df_pontos_ajuste[
+            (df_pontos_ajuste["Nome"] == colab_selecionado) & 
+            (df_pontos_ajuste["Data"] == data_ajuste.strftime("%Y-%m-%d"))
         ].sort_values(by="Hora").reset_index()
+        
         st.markdown(f"#### Registros para **{colab_selecionado}** em **{data_ajuste.strftime('%d/%m/%Y')}**")
+        
         if not registros_do_dia.empty:
             for i, row in registros_do_dia.iterrows():
                 original_index = row['index']
                 with st.container(border=True):
                     st.markdown(f"**Registro ID `{original_index}`:**")
                     col_acao, col_data, col_hora = st.columns(3)
-                    novo_acao = col_acao.selectbox("Ação", ["Entrada", "Pausa", "Retorno", "Saída"], index=["Entrada", "Pausa", "Retorno", "Saída"].index(row["Ação"]), key=f"ajust_acao_{original_index}")
+                    
+                    acoes_ponto = ["Entrada", "Pausa", "Retorno", "Saída"]
+                    index_acao = acoes_ponto.index(row["Ação"]) if row["Ação"] in acoes_ponto else 0
+                    
+                    novo_acao = col_acao.selectbox("Ação", acoes_ponto, index=index_acao, key=f"ajust_acao_{original_index}")
                     novo_data_str = col_data.text_input("Data (YYYY-MM-DD)", value=row["Data"], key=f"ajust_data_{original_index}").strip()
                     novo_hora_str = col_hora.text_input("Hora (HH:MM)", value=row["Hora"], key=f"ajust_hora_{original_index}").strip()
+                    
                     col_update, col_delete = st.columns(2)
+                    
                     if col_update.button("Salvar Alterações", use_container_width=True, key=f"update_btn_{original_index}"):
                         try:
                             datetime.strptime(novo_data_str, "%Y-%m-%d")
@@ -549,23 +598,26 @@ elif aba == "Ajustar Ponto":
                                 st.rerun()
                         except ValueError:
                             st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
+                    
                     if col_delete.button("Excluir Registro", use_container_width=True, key=f"delete_btn_{original_index}"):
                         if deletar_ponto(original_index):
                             st.warning(f"O registro ID {original_index} foi excluído.")
                             st.rerun()
+        
         st.markdown("### Adicionar Novo Registro Manual")
         with st.form("form_add_ponto_manual"):
             col_add_acao, col_add_data, col_add_hora = st.columns(3)
             acao_manual = col_add_acao.selectbox("Ação", ["Entrada", "Pausa", "Retorno", "Saída"], key="add_manual_acao")
             data_manual_str = col_add_data.text_input("Data (YYYY-MM-DD)", value=data_ajuste.strftime("%Y-%m-%d")).strip()
             hora_manual_str = col_add_hora.text_input("Hora (HH:MM)", value=datetime.now().strftime("%H:%M")).strip()
+            
             if st.form_submit_button("Adicionar Registro"):
                 try:
                     datetime.strptime(data_manual_str, "%Y-%m-%d")
                     datetime.strptime(hora_manual_str, "%H:%M")
-                    registrar_evento(colab_selecionado, acao_manual, data_manual_str, hora_manual_str)
-                    st.success("Novo registro manual adicionado com sucesso.")
-                    st.rerun()
+                    if registrar_evento(colab_selecionado, acao_manual, data_manual_str, hora_manual_str):
+                        st.success("Novo registro manual adicionado com sucesso.")
+                        st.rerun()
                 except ValueError:
                     st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
     else:

@@ -260,16 +260,16 @@ def calcular_horas_extras(df_colaborador):
                     
                     if data_atual in br_holidays:
                         extras_100 += duracao_no_dia
-                    elif dia_semana == 6:
+                    elif dia_semana == 6: # Domingo
                         extras_100 += duracao_no_dia
-                    elif dia_semana == 5:
+                    elif dia_semana == 5: # Sábado
                         extras_50 += duracao_no_dia
-                    elif dia_semana == 4:
+                    elif dia_semana == 4: # Sexta-feira
                         limite = data_corrente.replace(hour=16, minute=0, second=0, microsecond=0)
                         if fim_calculo > limite:
                             inicio_extra = max(inicio_calculo, limite)
                             extras_50 += (fim_calculo - inicio_extra)
-                    elif 0 <= dia_semana <= 3:
+                    elif 0 <= dia_semana <= 3: # Segunda a Quinta
                         limite = data_corrente.replace(hour=17, minute=0, second=0, microsecond=0)
                         if fim_calculo > limite:
                             inicio_extra = max(inicio_calculo, limite)
@@ -417,6 +417,7 @@ elif aba == "Relatórios":
     st.markdown("Visualize o histórico de ponto, total de horas e baixe os arquivos.")
     df_pontos = carregar_pontos()
     df_colab = carregar_colaboradores()
+    
     if df_pontos.empty or df_colab.empty:
         st.warning("Sem dados suficientes para gerar relatórios.")
     else:
@@ -425,8 +426,60 @@ elif aba == "Relatórios":
         data_fim = col2.date_input("Data final", value=datetime.today(), key="relatorio_fim")
 
         st.markdown("---")
+
+        # --- NOVO BLOCO: QUANTITATIVO POR FUNÇÃO ---
+        st.subheader("Quantitativo por Função")
+        if not df_colab.empty:
+            contagem_funcao = df_colab['Funcao'].value_counts().reset_index()
+            contagem_funcao.columns = ['Função', 'Quantidade']
+            st.dataframe(contagem_funcao, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum colaborador cadastrado para exibir o quantitativo.")
         
-        # --- NOVO BLOCO: RESUMO GERAL DE HORAS EXTRAS ---
+        st.markdown("---")
+
+        # --- NOVO BLOCO: RELATÓRIO DE FALTAS ---
+        st.subheader("Relatório de Faltas (Segunda a Sexta)")
+        
+        faltas = {}
+        br_holidays = holidays.Brazil(state='CE')
+        
+        # Filtra colaboradores que não são vigias
+        colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]
+        nomes_esperados = set(colabs_normais['Nome'])
+
+        datas_periodo = pd.date_range(start=data_inicio, end=data_fim)
+
+        for data in datas_periodo:
+            # Verifica se é um dia de semana (0=Segunda, 4=Sexta) e não é feriado
+            if data.weekday() < 5 and data not in br_holidays:
+                data_str = data.strftime("%Y-%m-%d")
+                
+                # Nomes que registraram entrada no dia
+                presentes = set(df_pontos[
+                    (df_pontos['Data'] == data_str) & 
+                    (df_pontos['Ação'] == 'Entrada')
+                ]['Nome'])
+                
+                # Identifica os ausentes comparando com a lista de esperados
+                ausentes = nomes_esperados - presentes
+                
+                if ausentes:
+                    faltas[data.strftime('%d/%m/%Y')] = sorted(list(ausentes))
+
+        if faltas:
+            st.error("Foram encontradas as seguintes faltas no período:")
+            for data, nomes in faltas.items():
+                nomes_str = ", ".join(nomes)
+                st.markdown(f"**Data: {data}**")
+                # Usa markdown para deixar o texto vermelho
+                st.markdown(f'<p style="color:red;">Ausentes: {nomes_str}</p>', unsafe_allow_html=True)
+        else:
+            st.success("Nenhuma falta registrada para o período selecionado (Segunda a Sexta, exceto feriados).")
+
+        st.markdown("---")
+
+        # --- BLOCO EXISTENTE: RESUMO GERAL DE HORAS EXTRAS ---
         st.subheader("Resumo Geral de Horas Extras no Período")
         
         resumo_extras = []
@@ -458,13 +511,11 @@ elif aba == "Relatórios":
         
         if resumo_extras:
             df_resumo = pd.DataFrame(resumo_extras)
-            st.dataframe(df_resumo, use_container_width=True)
+            st.dataframe(df_resumo, use_container_width=True, hide_index=True)
         else:
             st.info("Nenhum colaborador com horas extras encontradas no período selecionado.")
         
         st.markdown("---")
-        # --- FIM DO NOVO BLOCO ---
-
 
         st.subheader("Análise Individual por Colaborador")
         nomes_disponiveis = df_colab["Nome"].unique().tolist()

@@ -438,7 +438,7 @@ elif aba == "Relatórios":
         st.markdown("---")
 
         # --- BLOCO DE RELATÓRIO DE FALTAS MODIFICADO ---
-        st.subheader("Relatório de Faltas (Segunda a Sexta)")
+        st.subheader("Relatório de Faltas")
 
         # Filtra colaboradores que não são vigias para a seleção
         colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]

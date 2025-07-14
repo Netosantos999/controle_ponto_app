@@ -427,7 +427,6 @@ elif aba == "Relatórios":
 
         st.markdown("---")
 
-        # --- NOVO BLOCO: QUANTITATIVO POR FUNÇÃO ---
         st.subheader("Quantitativo por Função")
         if not df_colab.empty:
             contagem_funcao = df_colab['Funcao'].value_counts().reset_index()
@@ -438,48 +437,81 @@ elif aba == "Relatórios":
         
         st.markdown("---")
 
-        # --- NOVO BLOCO: RELATÓRIO DE FALTAS ---
+        # --- BLOCO DE RELATÓRIO DE FALTAS MODIFICADO ---
         st.subheader("Relatório de Faltas (Segunda a Sexta)")
+
+        # Filtra colaboradores que não são vigias para a seleção
+        colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]
+        nomes_esperados_lista = ["Todos"] + sorted(colabs_normais['Nome'].unique().tolist())
+
+        # Adiciona o selectbox para filtrar por funcionário
+        colab_falta_selecionado = st.selectbox(
+            "Filtrar por Colaborador:",
+            nomes_esperados_lista,
+            key="falta_colab_select"
+        )
         
         faltas = {}
         br_holidays = holidays.Brazil(state='CE')
         
-        # Filtra colaboradores que não são vigias
-        colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]
-        nomes_esperados = set(colabs_normais['Nome'])
-
         datas_periodo = pd.date_range(start=data_inicio, end=data_fim)
 
-        for data in datas_periodo:
-            # Verifica se é um dia de semana (0=Segunda, 4=Sexta) e não é feriado
-            if data.weekday() < 5 and data not in br_holidays:
-                data_str = data.strftime("%Y-%m-%d")
-                
-                # Nomes que registraram entrada no dia
-                presentes = set(df_pontos[
-                    (df_pontos['Data'] == data_str) & 
-                    (df_pontos['Ação'] == 'Entrada')
-                ]['Nome'])
-                
-                # Identifica os ausentes comparando com a lista de esperados
-                ausentes = nomes_esperados - presentes
-                
-                if ausentes:
-                    faltas[data.strftime('%d/%m/%Y')] = sorted(list(ausentes))
-
-        if faltas:
-            st.error("Foram encontradas as seguintes faltas no período:")
-            for data, nomes in faltas.items():
-                nomes_str = ", ".join(nomes)
-                st.markdown(f"**Data: {data}**")
-                # Usa markdown para deixar o texto vermelho
-                st.markdown(f'<p style="color:red;">Ausentes: {nomes_str}</p>', unsafe_allow_html=True)
+        # Lógica para "Todos" os funcionários (comportamento original)
+        if colab_falta_selecionado == "Todos":
+            nomes_esperados_set = set(colabs_normais['Nome'])
+            for data in datas_periodo:
+                # Verifica se é um dia de semana (0=Segunda, 4=Sexta) e não é feriado
+                if data.weekday() < 5 and data not in br_holidays:
+                    data_str = data.strftime("%Y-%m-%d")
+                    presentes = set(df_pontos[
+                        (df_pontos['Data'] == data_str) & 
+                        (df_pontos['Ação'] == 'Entrada')
+                    ]['Nome'])
+                    ausentes = nomes_esperados_set - presentes
+                    if ausentes:
+                        faltas[data.strftime('%d/%m/%Y')] = sorted(list(ausentes))
+        
+        # Nova lógica para um funcionário específico
         else:
-            st.success("Nenhuma falta registrada para o período selecionado (Segunda a Sexta, exceto feriados).")
+            faltas_colaborador = []
+            for data in datas_periodo:
+                # Verifica se é um dia de semana e não é feriado
+                if data.weekday() < 5 and data not in br_holidays:
+                    data_str = data.strftime("%Y-%m-%d")
+                    # Verifica se o colaborador selecionado registrou entrada no dia
+                    presente = df_pontos[
+                        (df_pontos['Data'] == data_str) & 
+                        (df_pontos['Ação'] == 'Entrada') &
+                        (df_pontos['Nome'] == colab_falta_selecionado)
+                    ].empty
+                    # Se 'presente' for True, significa que o DataFrame estava vazio, logo ele faltou
+                    if presente:
+                        faltas_colaborador.append(data.strftime('%d/%m/%Y'))
+            
+            if faltas_colaborador:
+                faltas[colab_falta_selecionado] = faltas_colaborador
+
+        # Exibição dos resultados com base na seleção
+        if colab_falta_selecionado == "Todos":
+            if faltas:
+                st.error("Foram encontradas as seguintes faltas no período:")
+                for data, nomes in faltas.items():
+                    nomes_str = ", ".join(nomes)
+                    st.markdown(f"**Data: {data}**")
+                    st.markdown(f'<p style="color:red;">Ausentes: {nomes_str}</p>', unsafe_allow_html=True)
+            else:
+                st.success("Nenhuma falta registrada para o período selecionado (Segunda a Sexta, exceto feriados).")
+        else:
+            if colab_falta_selecionado in faltas:
+                st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias no período:")
+                # Exibe as datas das faltas em uma lista
+                for data_falta in faltas[colab_falta_selecionado]:
+                    st.markdown(f"- {data_falta}")
+            else:
+                st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
 
         st.markdown("---")
 
-        # --- BLOCO EXISTENTE: RESUMO GERAL DE HORAS EXTRAS ---
         st.subheader("Resumo Geral de Horas Extras no Período")
         
         resumo_extras = []
@@ -589,7 +621,6 @@ elif aba == "Relatórios":
         else:
             st.info("Nenhum registro encontrado para a data e filtro selecionados.")
         
-        # --- NOVO BLOCO: RESUMO DE HORAS TOTAIS POR FUNCIONÁRIO ---
         st.markdown("---")
         st.subheader("Resumo de Horas Totais por Funcionário no Período")
         st.write(f"Exibindo o total de horas trabalhadas por cada funcionário entre **{data_inicio.strftime('%d/%m/%Y')}** e **{data_fim.strftime('%d/%m/%Y')}**.")

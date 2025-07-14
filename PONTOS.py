@@ -589,6 +589,45 @@ elif aba == "Relatórios":
         else:
             st.info("Nenhum registro encontrado para a data e filtro selecionados.")
         
+        # --- NOVO BLOCO: RESUMO DE HORAS TOTAIS POR FUNCIONÁRIO ---
+        st.markdown("---")
+        st.subheader("Resumo de Horas Totais por Funcionário no Período")
+        st.write(f"Exibindo o total de horas trabalhadas por cada funcionário entre **{data_inicio.strftime('%d/%m/%Y')}** e **{data_fim.strftime('%d/%m/%Y')}**.")
+
+        df_pontos_periodo_resumo = df_pontos[
+            (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio)) &
+            (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
+        ]
+
+        if not df_pontos_periodo_resumo.empty:
+            df_horas_diarias = calcular_horas(df_pontos_periodo_resumo.copy())
+            df_validas = df_horas_diarias[df_horas_diarias['Horas Trabalhadas'] != 'Registro Incompleto'].copy()
+
+            if not df_validas.empty:
+                def hms_to_seconds(t):
+                    try:
+                        h, m = map(int, t.split(':'))
+                        return (h * 3600) + (m * 60)
+                    except (ValueError, TypeError):
+                        return 0
+                
+                df_validas['Segundos'] = df_validas['Horas Trabalhadas'].apply(hms_to_seconds)
+                resumo_segundos = df_validas.groupby('Nome')['Segundos'].sum().reset_index()
+
+                def seconds_to_hms(s):
+                    s = int(s)
+                    horas = s // 3600
+                    minutos = (s % 3600) // 60
+                    return f"{horas:02}:{minutos:02}"
+
+                resumo_segundos['Total de Horas'] = resumo_segundos['Segundos'].apply(seconds_to_hms)
+                df_resumo_final = resumo_segundos[['Nome', 'Total de Horas']]
+                st.dataframe(df_resumo_final, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum registro de hora completo encontrado no período para gerar o resumo.")
+        else:
+            st.info("Nenhum registro de ponto encontrado no período selecionado.")
+        
         st.markdown("---")
         st.subheader("Exportar Registros")
         st.download_button(

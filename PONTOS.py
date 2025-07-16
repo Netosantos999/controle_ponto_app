@@ -438,6 +438,7 @@ elif aba == "Relatórios":
         st.markdown("---")
 
         # --- BLOCO DE RELATÓRIO DE FALTAS APRIMORADO ---
+        # --- BLOCO DE RELATÓRIO DE FALTAS CORRIGIDO ---
         st.subheader("Relatório de Faltas")
         st.markdown("Exibe os dias úteis (Seg-Sex, exceto feriados) em que não houve registro de 'Entrada' para o colaborador no período selecionado.")
 
@@ -453,46 +454,53 @@ elif aba == "Relatórios":
         br_holidays = holidays.Brazil(state='CE')
         datas_periodo = pd.date_range(start=data_inicio, end=data_fim)
         
-        dias_uteis = [data for data in datas_periodo if data.weekday() < 5 and data not in br_holidays]
+        # Dicionário para armazenar as datas de falta para cada colaborador
+        faltas_por_colaborador = {nome: [] for nome in colabs_normais['Nome']}
         
-        if not dias_uteis:
-            st.info("Não há dias úteis no período selecionado para verificar faltas.")
-        else:
-            faltas_por_colaborador = {nome: [] for nome in colabs_normais['Nome']}
-            
-            for data in dias_uteis:
+        # Conjunto de todos os nomes de colaboradores esperados
+        nomes_esperados_set = set(colabs_normais['Nome'])
+
+        # Itera sobre os dias no período selecionado
+        for data in datas_periodo:
+            # Verifica se é um dia de semana (0=Segunda, 4=Sexta) e não é feriado
+            if data.weekday() < 5 and data not in br_holidays:
                 data_str = data.strftime("%Y-%m-%d")
+                
+                # Pega o conjunto de nomes que registraram entrada no dia
                 presentes_no_dia = set(df_pontos[
                     (df_pontos['Data'] == data_str) & 
                     (df_pontos['Ação'] == 'Entrada')
                 ]['Nome'])
                 
-                for nome in faltas_por_colaborador:
-                    if nome not in presentes_no_dia:
-                        faltas_por_colaborador[nome].append(data.strftime('%d/%m/%Y'))
+                # Calcula os ausentes subtraindo os presentes do total esperado
+                ausentes = nomes_esperados_set - presentes_no_dia
+                
+                # Adiciona a data da falta para cada colaborador ausente
+                for nome_ausente in ausentes:
+                    if nome_ausente in faltas_por_colaborador:
+                        faltas_por_colaborador[nome_ausente].append(data.strftime('%d/%m/%Y'))
 
-            # Filtrar dicionário para manter apenas colaboradores com faltas
-            faltas_por_colaborador = {nome: datas for nome, datas in faltas_por_colaborador.items() if datas}
+        # Filtra o dicionário para manter apenas colaboradores que tiveram faltas
+        faltas_encontradas = {nome: datas for nome, datas in faltas_por_colaborador.items() if datas}
 
-            if not faltas_por_colaborador:
-                st.success("Nenhuma falta registrada para o período e filtro selecionados.")
-            else:
-                if colab_falta_selecionado == "Todos":
-                    st.error("Foram encontradas as seguintes faltas no período:")
-                    for nome, datas_faltas in sorted(faltas_por_colaborador.items()):
-                        with st.expander(f"**{nome}** - {len(datas_faltas)} falta(s)"):
-                            for data_falta in datas_faltas:
-                                st.markdown(f"- {data_falta}")
-                else:
-                    if colab_falta_selecionado in faltas_por_colaborador:
-                        st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias:")
-                        datas_ausencia = faltas_por_colaborador[colab_falta_selecionado]
-                        for data_falta in datas_ausencia:
+        if not faltas_encontradas:
+            st.success("Nenhuma falta registrada para o período e filtro selecionados.")
+        else:
+            if colab_falta_selecionado == "Todos":
+                st.error("Foram encontradas as seguintes faltas no período:")
+                # Ordena o dicionário pelo nome do colaborador para exibição
+                for nome, datas_faltas in sorted(faltas_encontradas.items()):
+                    with st.expander(f"**{nome}** - {len(datas_faltas)} falta(s)"):
+                        for data_falta in sorted(list(set(datas_faltas))): # Garante datas únicas e ordenadas
                             st.markdown(f"- {data_falta}")
-                    else:
-                        st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
-        
-        st.markdown("---")
+            else:
+                if colab_falta_selecionado in faltas_encontradas:
+                    st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias:")
+                    datas_ausencia = sorted(list(set(faltas_encontradas[colab_falta_selecionado])))
+                    for data_falta in datas_ausencia:
+                        st.markdown(f"- {data_falta}")
+                else:
+                    st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
 
         st.subheader("Resumo Geral de Horas Extras no Período")
         

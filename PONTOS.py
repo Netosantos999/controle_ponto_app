@@ -437,79 +437,61 @@ elif aba == "Relatórios":
         
         st.markdown("---")
 
-        # --- BLOCO DE RELATÓRIO DE FALTAS MODIFICADO ---
+        # --- BLOCO DE RELATÓRIO DE FALTAS APRIMORADO ---
         st.subheader("Relatório de Faltas")
+        st.markdown("Exibe os dias úteis (Seg-Sex, exceto feriados) em que não houve registro de 'Entrada' para o colaborador no período selecionado.")
 
-        # Filtra colaboradores que não são vigias para a seleção
         colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]
         nomes_esperados_lista = ["Todos"] + sorted(colabs_normais['Nome'].unique().tolist())
-
-        # Adiciona o selectbox para filtrar por funcionário
+        
         colab_falta_selecionado = st.selectbox(
             "Filtrar por Colaborador:",
             nomes_esperados_lista,
             key="falta_colab_select"
         )
         
-        faltas = {}
         br_holidays = holidays.Brazil(state='CE')
-        
         datas_periodo = pd.date_range(start=data_inicio, end=data_fim)
-
-        # Lógica para "Todos" os funcionários (comportamento original)
-        if colab_falta_selecionado == "Todos":
-            nomes_esperados_set = set(colabs_normais['Nome'])
-            for data in datas_periodo:
-                # Verifica se é um dia de semana (0=Segunda, 4=Sexta) e não é feriado
-                if data.weekday() < 5 and data not in br_holidays:
-                    data_str = data.strftime("%Y-%m-%d")
-                    presentes = set(df_pontos[
-                        (df_pontos['Data'] == data_str) & 
-                        (df_pontos['Ação'] == 'Entrada')
-                    ]['Nome'])
-                    ausentes = nomes_esperados_set - presentes
-                    if ausentes:
-                        faltas[data.strftime('%d/%m/%Y')] = sorted(list(ausentes))
         
-        # Nova lógica para um funcionário específico
+        dias_uteis = [data for data in datas_periodo if data.weekday() < 5 and data not in br_holidays]
+        
+        if not dias_uteis:
+            st.info("Não há dias úteis no período selecionado para verificar faltas.")
         else:
-            faltas_colaborador = []
-            for data in datas_periodo:
-                # Verifica se é um dia de semana e não é feriado
-                if data.weekday() < 5 and data not in br_holidays:
-                    data_str = data.strftime("%Y-%m-%d")
-                    # Verifica se o colaborador selecionado registrou entrada no dia
-                    presente = df_pontos[
-                        (df_pontos['Data'] == data_str) & 
-                        (df_pontos['Ação'] == 'Entrada') &
-                        (df_pontos['Nome'] == colab_falta_selecionado)
-                    ].empty
-                    # Se 'presente' for True, significa que o DataFrame estava vazio, logo ele faltou
-                    if presente:
-                        faltas_colaborador.append(data.strftime('%d/%m/%Y'))
+            faltas_por_colaborador = {nome: [] for nome in colabs_normais['Nome']}
             
-            if faltas_colaborador:
-                faltas[colab_falta_selecionado] = faltas_colaborador
+            for data in dias_uteis:
+                data_str = data.strftime("%Y-%m-%d")
+                presentes_no_dia = set(df_pontos[
+                    (df_pontos['Data'] == data_str) & 
+                    (df_pontos['Ação'] == 'Entrada')
+                ]['Nome'])
+                
+                for nome in faltas_por_colaborador:
+                    if nome not in presentes_no_dia:
+                        faltas_por_colaborador[nome].append(data.strftime('%d/%m/%Y'))
 
-        # Exibição dos resultados com base na seleção
-        if colab_falta_selecionado == "Todos":
-            if faltas:
-                st.error("Foram encontradas as seguintes faltas no período:")
-                for data, nomes in faltas.items():
-                    nomes_str = ", ".join(nomes)
-                    st.markdown(f"**Data: {data}**")
-                    st.markdown(f'<p style="color:red;">Ausentes: {nomes_str}</p>', unsafe_allow_html=True)
-            else:
-                st.success("Nenhuma falta registrada para o período selecionado (Segunda a Sexta, exceto feriados).")
-        else:
-            if colab_falta_selecionado in faltas:
-                st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias no período:")
-                # Exibe as datas das faltas em uma lista
-                for data_falta in faltas[colab_falta_selecionado]:
-                    st.markdown(f"- {data_falta}")
-            else:
-                st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
+            # Filtrar dicionário para manter apenas colaboradores com faltas
+            faltas_por_colaborador = {nome: datas for nome, datas in faltas_por_colaborador.items() if datas}
 
+            if not faltas_por_colaborador:
+                st.success("Nenhuma falta registrada para o período e filtro selecionados.")
+            else:
+                if colab_falta_selecionado == "Todos":
+                    st.error("Foram encontradas as seguintes faltas no período:")
+                    for nome, datas_faltas in sorted(faltas_por_colaborador.items()):
+                        with st.expander(f"**{nome}** - {len(datas_faltas)} falta(s)"):
+                            for data_falta in datas_faltas:
+                                st.markdown(f"- {data_falta}")
+                else:
+                    if colab_falta_selecionado in faltas_por_colaborador:
+                        st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias:")
+                        datas_ausencia = faltas_por_colaborador[colab_falta_selecionado]
+                        for data_falta in datas_ausencia:
+                            st.markdown(f"- {data_falta}")
+                    else:
+                        st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
+        
         st.markdown("---")
 
         st.subheader("Resumo Geral de Horas Extras no Período")

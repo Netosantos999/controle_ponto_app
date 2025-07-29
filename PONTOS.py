@@ -21,8 +21,10 @@ st.set_page_config(
     }
 )
 
+# --- Constantes de Arquivos e Diretórios ---
 ARQ_PONTO = "registro_ponto.csv"
 ARQ_COLAB = "colaboradores.csv"
+FOTOS_DIR = "fotos_colaboradores" # Diretório para as fotos
 
 class AcaoPonto(str, Enum):
     ENTRADA = "Entrada"
@@ -31,16 +33,22 @@ class AcaoPonto(str, Enum):
     RETORNO = "Retorno"
 
 class DataManager:
-    def __init__(self, arq_colab: str, arq_ponto: str):
+    def __init__(self, arq_colab: str, arq_ponto: str, fotos_dir: str):
         self.arq_colab = arq_colab
         self.arq_ponto = arq_ponto
+        self.fotos_dir = fotos_dir
         self._inicializar_arquivos()
 
     def _inicializar_arquivos(self):
+        # Garante que os arquivos CSV existam
         if not os.path.exists(self.arq_colab):
             pd.DataFrame(columns=["Nome", "Funcao"]).to_csv(self.arq_colab, index=False)
         if not os.path.exists(self.arq_ponto):
             pd.DataFrame(columns=["Nome", "Ação", "Data", "Hora"]).to_csv(self.arq_ponto, index=False)
+        
+        # Garante que o diretório de fotos exista
+        os.makedirs(self.fotos_dir, exist_ok=True)
+
 
     @st.cache_data(ttl=30)
     def carregar_colaboradores(_self) -> pd.DataFrame:
@@ -64,7 +72,8 @@ class DataManager:
         df.to_csv(self.arq_ponto, index=False)
         st.cache_data.clear()
 
-data_manager = DataManager(ARQ_COLAB, ARQ_PONTO)
+# Instancia o DataManager passando também o diretório de fotos
+data_manager = DataManager(ARQ_COLAB, ARQ_PONTO, FOTOS_DIR)
 
 def adicionar_colaborador(nome: str, funcao: str) -> bool:
     df = data_manager.carregar_colaboradores()
@@ -232,23 +241,20 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
 
                     if inicio_calculo >= fim: break
                     
-                    # CORREÇÃO APLICADA AQUI: Lógica de IF/ELSE reestruturada
-                    # Primeiro, trata os casos de 100% (não entram em outras regras)
                     if data_atual in br_holidays or dia_semana == 6:
                         duracao_100 = fim_calculo - inicio_calculo
                         if duracao_100.total_seconds() > 0:
                             periodo = get_periodo_do_dia(inicio_calculo)
                             extras_100_datas[data_atual].append({"duracao": duracao_100, "inicio_turno": inicio, "periodo": periodo})
                     
-                    # Se não for feriado ou domingo, verifica as outras regras de 50%
                     else:
-                        if dia_semana == 5: # Sábado
+                        if dia_semana == 5:
                             duracao_50 = fim_calculo - inicio_calculo
                             if duracao_50.total_seconds() > 0:
                                 periodo = get_periodo_do_dia(inicio_calculo)
                                 extras_50_datas[data_atual].append({"duracao": duracao_50, "inicio_turno": inicio, "periodo": periodo})
                         
-                        elif dia_semana == 4: # Sexta-feira
+                        elif dia_semana == 4:
                             limite = pd.Timestamp(data_atual).replace(hour=16, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -257,7 +263,7 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                                     periodo_he = get_periodo_do_dia(overtime_start)
                                     extras_50_datas[data_atual].append({"duracao": overtime_duration, "inicio_turno": inicio, "periodo": periodo_he})
 
-                        elif 0 <= dia_semana <= 3: # Segunda a Quinta
+                        elif 0 <= dia_semana <= 3:
                             limite = pd.Timestamp(data_atual).replace(hour=17, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -278,6 +284,7 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
         "100%": {"total": total_100, "datas": extras_100_datas},
     }
 
+# --- FUNÇÃO MODIFICADA ---
 def mostrar_pagina_registro():
     st.header("Registro de Ponto")
     st.markdown("""
@@ -303,6 +310,22 @@ def mostrar_pagina_registro():
         if not nome_selecionado:
             st.warning("Por favor, selecione um nome.")
             return
+            
+        # --- INÍCIO DA NOVA FUNCIONALIDADE ---
+        # Procura e exibe a foto do colaborador selecionado
+        foto_path = None
+        for ext in ['jpg', 'png', 'jpeg']:
+            path_tentativa = os.path.join(FOTOS_DIR, f"{nome_selecionado}.{ext}")
+            if os.path.exists(path_tentativa):
+                foto_path = path_tentativa
+                break
+
+        if foto_path:
+           st.image(foto_path, caption=f"Olá, {nome_selecionado.split(' ')[0]}!", width=100)
+        
+        st.markdown("---")
+        # --- FIM DA NOVA FUNCIONALIDADE ---
+
 
         st.write(f"Colaborador selecionado: **{nome_selecionado}**")
         data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")

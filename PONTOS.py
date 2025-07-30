@@ -292,7 +292,7 @@ def mostrar_pagina_registro():
     - Pausa às 12:00
     - Retorno às 13:00
     - Saída às 17:00 (segunda a quinta) ou 16:00 (sexta)
-    
+
     Os **Vigias** têm botões específicos para seus turnos.
     """)
 
@@ -310,8 +310,7 @@ def mostrar_pagina_registro():
         if not nome_selecionado:
             st.warning("Por favor, selecione um nome.")
             return
-            
-        # --- INÍCIO DA NOVA FUNCIONALIDADE ---
+
         # Procura e exibe a foto do colaborador selecionado
         foto_path = None
         for ext in ['jpg', 'png', 'jpeg']:
@@ -322,19 +321,20 @@ def mostrar_pagina_registro():
 
         if foto_path:
            st.image(foto_path, caption=f"Olá, {nome_selecionado.split(' ')[0]}!", width=100)
-        
-        st.markdown("---")
-        # --- FIM DA NOVA FUNCIONALIDADE ---
 
+        st.markdown("---")
 
         st.write(f"Colaborador selecionado: **{nome_selecionado}**")
         data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")
-        hora_input = st.text_input("Hora da Entrada (HH:MM):", placeholder="Ex: 08:00", key="hora_input_manual")
+        
+        # --- LINHA MODIFICADA ---
+        # O valor padrão da hora de entrada é definido como "07:00"
+        hora_input = st.text_input("Hora da Entrada (HH:MM):", value="07:00", placeholder="Ex: 07:00", key="hora_input_manual")
 
         try:
             if hora_input:
                 datetime.strptime(hora_input, "%H:%M")
-            
+
             data_str = data_input.strftime("%Y-%m-%d")
             hora_str = hora_input.strip()
 
@@ -343,7 +343,7 @@ def mostrar_pagina_registro():
                     st.error("A hora da entrada é obrigatória para o registro padrão.")
                 else:
                     entrada_sucesso = registrar_evento(nome_selecionado, AcaoPonto.ENTRADA, data_str, hora_str)
-                    
+
                     if entrada_sucesso:
                         registrar_evento(nome_selecionado, AcaoPonto.PAUSA, data_str, "12:00")
                         registrar_evento(nome_selecionado, AcaoPonto.RETORNO, data_str, "13:00")
@@ -357,7 +357,7 @@ def mostrar_pagina_registro():
             if st.button("Registrar Turno Noturno (18:00 - 06:00)", use_container_width=True):
                 data_saida_dt = data_input + timedelta(days=1)
                 data_saida_str = data_saida_dt.strftime("%Y-%m-%d")
-                
+
                 if registrar_evento(nome_selecionado, AcaoPonto.ENTRADA, data_str, "18:00"):
                     registrar_evento(nome_selecionado, AcaoPonto.SAIDA, data_saida_str, "06:00")
                     st.success(f"Turno noturno registrado com sucesso para {nome_selecionado}.")
@@ -369,7 +369,7 @@ def mostrar_pagina_registro():
                    st.success(f"Turno diurno registrado com sucesso para {nome_selecionado}.")
 
         except ValueError:
-            if hora_input: 
+            if hora_input:
                 st.error("Formato de hora inválido. Use HH:MM.")
 
 def mostrar_pagina_gerenciar():

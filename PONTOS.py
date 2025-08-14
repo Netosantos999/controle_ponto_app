@@ -61,7 +61,7 @@ class DataManager:
         df.to_csv(self.arq_colab, index=False)
         st.cache_data.clear()
 
-    @st.cache_data(ttl=10)
+    # --- LINHA REMOVIDA DAQUI ---
     def carregar_pontos(_self) -> pd.DataFrame:
         try:
             return pd.read_csv(_self.arq_ponto)
@@ -193,13 +193,15 @@ def calcular_horas(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(resultado, columns=["Nome", "Data", "Horas Trabalhadas"])
 
 def get_periodo_do_dia(dt_object: datetime) -> str:
-    """Classifica a hora do dia em Manhã, Tarde ou Noite."""
+    """Classifica a hora do dia em Madrugada, Manhã, Tarde ou Noite."""
     hour = dt_object.hour
-    if 5 <= hour < 12:
+    if 0 <= hour < 5:
+        return "Madrugada"
+    elif 5 <= hour < 12:
         return "Manhã"
     elif 12 <= hour < 18:
         return "Tarde"
-    else: # Inclui a noite (18h-23h) e a madrugada (0h-4h)
+    else: # Horas de 18 a 23
         return "Noite"
 
 def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
@@ -241,20 +243,39 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
 
                     if inicio_calculo >= fim: break
                     
-                    if data_atual in br_holidays or dia_semana == 6:
+                    if data_atual in br_holidays or dia_semana == 6: # Feriado ou Domingo
                         duracao_100 = fim_calculo - inicio_calculo
                         if duracao_100.total_seconds() > 0:
                             periodo = get_periodo_do_dia(inicio_calculo)
                             extras_100_datas[data_atual].append({"duracao": duracao_100, "inicio_turno": inicio, "periodo": periodo})
                     
-                    else:
-                        if dia_semana == 5:
+                    else: # Dias de semana (Seg-Sáb)
+                        # --- INÍCIO DO NOVO BLOCO ---
+                        # Calcula HE se o trabalho começou antes das 07:00
+                        limite_inicio_expediente = pd.Timestamp(data_atual).replace(hour=7, minute=0)
+                        
+                        if inicio_calculo < limite_inicio_expediente:
+                            fim_he_matinal = min(fim_calculo, limite_inicio_expediente)
+                            overtime_duration_morning = fim_he_matinal - inicio_calculo
+                            if overtime_duration_morning.total_seconds() > 0:
+                                periodo_he_morning = get_periodo_do_dia(inicio_calculo)
+                                extras_50_datas[data_atual].append({
+                                    "duracao": overtime_duration_morning, 
+                                    "inicio_turno": inicio, 
+                                    "periodo": periodo_he_morning
+                                })
+                            
+                            # Ajusta o início do cálculo para não recontar as horas já consideradas como extras
+                            inicio_calculo = max(inicio_calculo, limite_inicio_expediente)
+                        # --- FIM DO NOVO BLOCO ---
+                        
+                        if dia_semana == 5: # Sábado
                             duracao_50 = fim_calculo - inicio_calculo
                             if duracao_50.total_seconds() > 0:
                                 periodo = get_periodo_do_dia(inicio_calculo)
                                 extras_50_datas[data_atual].append({"duracao": duracao_50, "inicio_turno": inicio, "periodo": periodo})
                         
-                        elif dia_semana == 4:
+                        elif dia_semana == 4: # Sexta-feira
                             limite = pd.Timestamp(data_atual).replace(hour=16, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -263,7 +284,7 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                                     periodo_he = get_periodo_do_dia(overtime_start)
                                     extras_50_datas[data_atual].append({"duracao": overtime_duration, "inicio_turno": inicio, "periodo": periodo_he})
 
-                        elif 0 <= dia_semana <= 3:
+                        elif 0 <= dia_semana <= 3: # Segunda a Quinta
                             limite = pd.Timestamp(data_atual).replace(hour=17, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -451,8 +472,9 @@ def mostrar_pagina_relatorios():
         return
 
     col1, col2 = st.columns(2)
-    data_inicio = col1.date_input("Data inicial", value=datetime.today().replace(day=1), key="relatorio_inicio")
-    data_fim = col2.date_input("Data final", value=datetime.today(), key="relatorio_fim")
+    # Garante que os seletores de data também usem o formato correto
+    data_inicio = col1.date_input("Data inicial", value=datetime.today().replace(day=1), key="relatorio_inicio", format="DD/MM/YYYY")
+    data_fim = col2.date_input("Data final", value=datetime.today(), key="relatorio_fim", format="DD/MM/YYYY")
 
     st.markdown("---")
 
@@ -551,6 +573,7 @@ def mostrar_pagina_relatorios():
                     col_he1.metric(label="Horas Extras (50%)", value=formatar_timedelta(he_50_info["total"]))
                     col_he2.metric(label="Horas Extras (100%)", value=formatar_timedelta(he_100_info["total"]))
 
+                    # --- CORREÇÃO DE FORMATO DE DATA APLICADA AQUI ---
                     if he_50_info["datas"]:
                         with st.expander("Ver detalhes das Horas Extras (50%)"):
                             registros_flat = []
@@ -573,6 +596,7 @@ def mostrar_pagina_relatorios():
                                     contexto_str = f" `(Ref. turno de {reg['inicio_turno'].strftime('%d/%m %H:%M')})`"
                                 st.markdown(f"- **Data:** {data_evento_str} - **Período:** {periodo_str} - **Duração:** {duracao_str}{contexto_str}")
 
+                    # --- CORREÇÃO DE FORMATO DE DATA APLICADA AQUI ---
                     if he_100_info["datas"]:
                         with st.expander("Ver detalhes das Horas Extras (100%)"):
                             registros_flat = []
@@ -640,6 +664,7 @@ def mostrar_pagina_relatorios():
                 col_he1.metric(label="Horas Extras (50%)", value=formatar_timedelta(he_50_info["total"]))
                 col_he2.metric(label="Horas Extras (100%)", value=formatar_timedelta(he_100_info["total"]))
 
+                # --- CORREÇÃO DE FORMATO DE DATA APLICADA AQUI ---
                 if he_50_info["datas"]:
                     with st.expander("Ver detalhes das Horas Extras (50%)"):
                         registros_flat = []
@@ -662,6 +687,7 @@ def mostrar_pagina_relatorios():
                                 contexto_str = f" `(Ref. turno de {reg['inicio_turno'].strftime('%d/%m %H:%M')})`"
                             st.markdown(f"- **Data:** {data_evento_str} - **Período:** {periodo_str} - **Duração:** {duracao_str}{contexto_str}")
                 
+                # --- CORREÇÃO DE FORMATO DE DATA APLICADA AQUI ---
                 if he_100_info["datas"]:
                     with st.expander("Ver detalhes das Horas Extras (100%)"):
                         registros_flat = []
@@ -686,11 +712,13 @@ def mostrar_pagina_relatorios():
                 
                 with st.expander("Ver regras de cálculo de Horas Extras"):
                     st.markdown("""
-                    - **Feriados:** Todas as horas trabalhadas são calculadas a 100%.
-                    - **Domingo:** Todas as horas trabalhadas são calculadas a 100%.
-                    - **Sábado:** Todas as horas trabalhadas são calculadas a 50%.
-                    - **Sexta-feira:** Horas trabalhadas após as 16:00 são calculadas a 50%.
-                    - **Segunda a Quinta:** Horas trabalhadas após as 17:00 são calculadas a 50%.
+                    - **Horas Extras 100%:**
+                        - Todas as horas trabalhadas em **Feriados** e **Domingos**.
+                    - **Horas Extras 50%:**
+                        - Horas trabalhadas em dias de semana **antes das 07:00**.
+                        - Todas as horas trabalhadas aos **Sábados**.
+                        - Horas trabalhadas após as **16:00** na **Sexta-feira**.
+                        - Horas trabalhadas após as **17:00** de **Segunda a Quinta-feira**.
                     """)
             else:
                 st.info("Nenhum registro de ponto encontrado para o cálculo de horas extras deste colaborador no período.")
@@ -701,7 +729,8 @@ def mostrar_pagina_relatorios():
     st.subheader("Histórico Detalhado por Data")
     col_date, col_name_report = st.columns([1, 2])
     with col_date:
-        data_relatorio = st.date_input("Selecione uma data:", datetime.today(), key="rel_date_input")
+        # Garante que os seletores de data também usem o formato correto
+        data_relatorio = st.date_input("Selecione uma data:", datetime.today(), key="rel_date_input", format="DD/MM/YYYY")
     with col_name_report:
         nomes_relatorio = ["Todos"] + df_colab["Nome"].tolist()
         colab_relatorio = st.selectbox("Filtrar por Colaborador:", nomes_relatorio, key="rel_colab_select")
@@ -777,7 +806,8 @@ def mostrar_pagina_ajuste():
     with col_ajuste_sel:
         colab_selecionado = st.selectbox("**Selecione o Colaborador:**", nomes_ajuste, key="ajustar_colab_select_main")
     with col_ajuste_date:
-        data_ajuste = st.date_input("**Selecione a Data do Ajuste:**", datetime.today(), key="ajustar_date_input_main")
+        # --- MODIFICAÇÃO 1: Adicionado format="DD/MM/YYYY" para o seletor de data ---
+        data_ajuste = st.date_input("**Selecione a Data do Ajuste:**", datetime.today(), key="ajustar_date_input_main", format="DD/MM/YYYY")
     
     if colab_selecionado:
         df_pontos_ajuste = data_manager.carregar_pontos()
@@ -799,20 +829,25 @@ def mostrar_pagina_ajuste():
                     index_acao = acoes_ponto_lista.index(row["Ação"]) if row["Ação"] in acoes_ponto_lista else 0
                     
                     novo_acao_str = col_acao.selectbox("Ação", acoes_ponto_lista, index=index_acao, key=f"ajust_acao_{original_index}")
-                    novo_data_str = col_data.text_input("Data (YYYY-MM-DD)", value=row["Data"], key=f"ajust_data_{original_index}").strip()
+                    
+                    # --- MODIFICAÇÃO 2: Converte a data para DD/MM/YYYY para exibição no campo de texto ---
+                    data_para_exibir = datetime.strptime(row["Data"], "%Y-%m-%d").strftime("%d/%m/%Y")
+                    novo_data_input = col_data.text_input("Data (DD/MM/YYYY)", value=data_para_exibir, key=f"ajust_data_{original_index}").strip()
                     novo_hora_str = col_hora.text_input("Hora (HH:MM)", value=row["Hora"], key=f"ajust_hora_{original_index}").strip()
                     
                     col_update, col_delete = st.columns(2)
                     
                     if col_update.button("Salvar Alterações", use_container_width=True, key=f"update_btn_{original_index}"):
                         try:
-                            datetime.strptime(novo_data_str, "%Y-%m-%d")
-                            datetime.strptime(novo_hora_str, "%H:%M")
-                            if atualizar_ponto(original_index, colab_selecionado, AcaoPonto(novo_acao_str), novo_data_str, novo_hora_str):
+                            # --- MODIFICAÇÃO 3: Converte a data de DD/MM/YYYY (do usuário) para YYYY-MM-DD (para salvar) ---
+                            data_obj = datetime.strptime(novo_data_input, "%d/%m/%Y")
+                            data_para_salvar = data_obj.strftime("%Y-%m-%d")
+                            datetime.strptime(novo_hora_str, "%H:%M") # Valida a hora
+                            if atualizar_ponto(original_index, colab_selecionado, AcaoPonto(novo_acao_str), data_para_salvar, novo_hora_str):
                                 st.success(f"O registro ID {original_index} foi atualizado com sucesso.")
                                 st.rerun()
                         except ValueError:
-                            st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
+                            st.error("Formato de Data (DD/MM/YYYY) ou Hora (HH:MM) inválido.")
                     
                     if col_delete.button("Excluir Registro", use_container_width=True, key=f"delete_btn_{original_index}"):
                         if deletar_ponto(original_index):
@@ -823,18 +858,22 @@ def mostrar_pagina_ajuste():
         with st.form("form_add_ponto_manual"):
             col_add_acao, col_add_data, col_add_hora = st.columns(3)
             acao_manual_str = col_add_acao.selectbox("Ação", [a.value for a in AcaoPonto], key="add_manual_acao")
-            data_manual_str = col_add_data.text_input("Data (YYYY-MM-DD)", value=data_ajuste.strftime("%Y-%m-%d")).strip()
+            
+            # --- MODIFICAÇÃO 4: O campo de texto para nova data também usa o formato DD/MM/YYYY ---
+            data_manual_input = col_add_data.text_input("Data (DD/MM/YYYY)", value=data_ajuste.strftime("%d/%m/%Y")).strip()
             hora_manual_str = col_add_hora.text_input("Hora (HH:MM)", value=datetime.now().strftime("%H:%M")).strip()
             
             if st.form_submit_button("Adicionar Registro"):
                 try:
-                    datetime.strptime(data_manual_str, "%Y-%m-%d")
-                    datetime.strptime(hora_manual_str, "%H:%M")
-                    if registrar_evento(colab_selecionado, AcaoPonto(acao_manual_str), data_manual_str, hora_manual_str):
+                    # --- MODIFICAÇÃO 5: Converte a nova data de DD/MM/YYYY (do usuário) para YYYY-MM-DD (para salvar) ---
+                    data_obj = datetime.strptime(data_manual_input, "%d/%m/%Y")
+                    data_manual_para_salvar = data_obj.strftime("%Y-%m-%d")
+                    datetime.strptime(hora_manual_str, "%H:%M") # Valida a hora
+                    if registrar_evento(colab_selecionado, AcaoPonto(acao_manual_str), data_manual_para_salvar, hora_manual_str):
                         st.success("Novo registro manual adicionado com sucesso.")
                         st.rerun()
                 except ValueError:
-                    st.error("Formato de Data (YYYY-MM-DD) ou Hora (HH:MM) inválido.")
+                    st.error("Formato de Data (DD/MM/YYYY) ou Hora (HH:MM) inválido.")
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
 

@@ -796,18 +796,23 @@ def mostrar_pagina_relatorios():
     
     st.markdown("---")
     st.subheader("Exportar Registros")
-    st.download_button(
-        label="Baixar Registros de Ponto (registro_ponto.csv)",
-        data=df_pontos.to_csv(index=False).encode('utf-8'),
-        file_name='registro_ponto.csv',
-        mime='text/csv'
-    )
-    st.download_button(
-        label="Baixar Lista de Colaboradores (colaboradores.csv)",
-        data=df_colab.to_csv(index=False).encode('utf-8'),
-        file_name='colaboradores.csv',
-        mime='text/csv'
-    )
+    # Apenas o admin pode exportar os dados
+    if st.session_state.get('role') == 'Admin':
+        st.download_button(
+            label="Baixar Registros de Ponto (registro_ponto.csv)",
+            data=df_pontos.to_csv(index=False).encode('utf-8'),
+            file_name='registro_ponto.csv',
+            mime='text/csv'
+        )
+        st.download_button(
+            label="Baixar Lista de Colaboradores (colaboradores.csv)",
+            data=df_colab.to_csv(index=False).encode('utf-8'),
+            file_name='colaboradores.csv',
+            mime='text/csv'
+        )
+    else:
+        st.info("A exportação de dados está disponível apenas para administradores.")
+
 
 def mostrar_pagina_ajuste():
     st.header("Ajuste Manual de Ponto")
@@ -986,23 +991,83 @@ def mostrar_pagina_feriados():
                         st.warning(f"Feriado '{row['Descricao']}' reativado.")
                         st.rerun()
 
+# --- NOVO: Tela de Login ---
+def show_login_screen():
+    st.header("Acesso ao Sistema de Ponto")
+    st.markdown("Por favor, insira a chave de acesso para continuar.")
+
+    with st.form("login_form"):
+        password = st.text_input("Chave de Acesso (Admin)", type="password", key="password_input")
+        admin_login_button = st.form_submit_button("Entrar como Administrador")
+
+        if admin_login_button:
+            # st.secrets.get("ACCESS_KEY") busca a chave no arquivo secrets.toml
+            if password == st.secrets.get("ACCESS_KEY"):
+                st.session_state['authenticated'] = True
+                st.session_state['role'] = 'Admin'
+                st.success("Login de administrador bem-sucedido!")
+                st.rerun()
+            else:
+                st.error("Chave de acesso inválida.")
+    
+    st.markdown("---")
+    if st.button("Acessar como Visitante (somente visualização de relatórios)"):
+        st.session_state['authenticated'] = True
+        st.session_state['role'] = 'Viewer'
+        st.info("Acessando em modo de visualização.")
+        st.rerun()
+
+
+# --- MODIFICADO: Função principal para controlar o acesso ---
 def main():
     st.title("Controle de Ponto")
-    st.markdown("Sistema para registro e gerenciamento de ponto dos colaboradores.")
+    
+    # Inicializa o estado da sessão se ainda não existir
+    if 'authenticated' not in st.session_state:
+        st.session_state['authenticated'] = False
+        st.session_state['role'] = None
 
-    paginas = {
-        "Registrar Ponto": mostrar_pagina_registro,
-        "Gerenciar Colaboradores": mostrar_pagina_gerenciar,
-        "Gerenciar Feriados": mostrar_pagina_feriados,
-        "Relatórios": mostrar_pagina_relatorios,
-        "Ajustar Ponto": mostrar_pagina_ajuste,
-    }
-    
-    aba_selecionada = st.sidebar.radio("Navegação", list(paginas.keys()))
-    
-    pagina_func = paginas.get(aba_selecionada)
-    if pagina_func:
-        pagina_func()
+    # Se o usuário não estiver autenticado, mostra a tela de login
+    if not st.session_state.get('authenticated'):
+        show_login_screen()
+    else:
+        # Se o usuário estiver autenticado, mostra a aplicação principal
+        st.sidebar.title(f"Bem-vindo, {st.session_state['role']}!")
+        st.sidebar.markdown("---")
+
+        # Define as páginas disponíveis para cada tipo de usuário
+        admin_pages = {
+            "Registrar Ponto": mostrar_pagina_registro,
+            "Gerenciar Colaboradores": mostrar_pagina_gerenciar,
+            "Gerenciar Feriados": mostrar_pagina_feriados,
+            "Relatórios": mostrar_pagina_relatorios,
+            "Ajustar Ponto": mostrar_pagina_ajuste,
+        }
+        
+        viewer_pages = {
+            "Relatórios": mostrar_pagina_relatorios,
+        }
+
+        # Seleciona o conjunto de páginas com base na função do usuário
+        if st.session_state['role'] == 'Admin':
+            pages_to_show = admin_pages
+        else: # Viewer
+            pages_to_show = viewer_pages
+
+        # Cria o menu de navegação na barra lateral
+        aba_selecionada = st.sidebar.radio("Navegação", list(pages_to_show.keys()))
+        
+        # Botão de Logout
+        st.sidebar.markdown("---")
+        if st.sidebar.button("Sair (Logout)"):
+            st.session_state['authenticated'] = False
+            st.session_state['role'] = None
+            st.rerun()
+
+        # Exibe a página selecionada
+        pagina_func = pages_to_show.get(aba_selecionada)
+        if pagina_func:
+            pagina_func()
 
 if __name__ == "__main__":
     main()

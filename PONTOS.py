@@ -2,6 +2,21 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import os
+from contextlib import contextmanager
+try:
+    from filelock import FileLock
+except ImportError:
+    FileLock = None
+
+# Utilitário para lock de arquivo
+@contextmanager
+def safe_csv_write(filepath):
+    if FileLock is not None:
+        lock = FileLock(filepath + ".lock")
+        with lock:
+            yield
+    else:
+        yield
 import holidays
 from collections import defaultdict
 from enum import Enum
@@ -66,7 +81,8 @@ class DataManager:
             return pd.DataFrame(columns=["Nome", "Funcao"])
 
     def salvar_colaboradores(self, df: pd.DataFrame):
-        df.to_csv(self.arq_colab, index=False)
+        with safe_csv_write(self.arq_colab):
+            df.to_csv(self.arq_colab, index=False)
         st.cache_data.clear()
 
     def carregar_pontos(_self) -> pd.DataFrame:
@@ -76,7 +92,8 @@ class DataManager:
             return pd.DataFrame(columns=["Nome", "Ação", "Data", "Hora"])
 
     def salvar_pontos(self, df: pd.DataFrame):
-        df.to_csv(self.arq_ponto, index=False)
+        with safe_csv_write(self.arq_ponto):
+            df.to_csv(self.arq_ponto, index=False)
         st.cache_data.clear()
 
     @st.cache_data(ttl=60)
@@ -89,7 +106,8 @@ class DataManager:
             return pd.DataFrame(columns=["Data", "Descricao"])
 
     def salvar_feriados(self, df: pd.DataFrame):
-        df.to_csv(self.arq_feriados, index=False)
+        with safe_csv_write(self.arq_feriados):
+            df.to_csv(self.arq_feriados, index=False)
         st.cache_data.clear()
         
     # --- NOVAS FUNÇÕES PARA GERENCIAR FERIADOS IGNORADOS ---
@@ -103,7 +121,8 @@ class DataManager:
             return pd.DataFrame(columns=["Data", "Descricao"])
 
     def salvar_feriados_ignorados(self, df: pd.DataFrame):
-        df.to_csv(self.arq_feriados_ignorados, index=False)
+        with safe_csv_write(self.arq_feriados_ignorados):
+            df.to_csv(self.arq_feriados_ignorados, index=False)
         st.cache_data.clear()
 
 # --- MODIFICADO ---
@@ -111,15 +130,30 @@ class DataManager:
 data_manager = DataManager(ARQ_COLAB, ARQ_PONTO, FOTOS_DIR, ARQ_FERIADOS, ARQ_FERIADOS_IGNORADOS)
 
 def adicionar_colaborador(nome: str, funcao: str) -> bool:
+    # Permissão: apenas Admin pode adicionar
+    if st.session_state.get('role') != 'Admin':
+        st.error("Permissão negada: apenas administradores podem adicionar colaboradores.")
+        return False
     df = data_manager.carregar_colaboradores()
-    if nome and nome not in df["Nome"].values:
-        novo_colaborador = pd.DataFrame([[nome, funcao]], columns=["Nome", "Funcao"])
-        df = pd.concat([df, novo_colaborador], ignore_index=True)
-        data_manager.salvar_colaboradores(df)
-        return True
-    return False
+    nome = nome.strip()
+    if not nome:
+        st.error("O nome do colaborador não pode estar vazio.")
+        return False
+    if any(char in nome for char in ";/\\|@#$%&*"):
+        st.error("O nome do colaborador contém caracteres inválidos.")
+        return False
+    if nome in df["Nome"].values:
+        st.warning(f"O nome '{nome}' já está cadastrado.")
+        return False
+    novo_colaborador = pd.DataFrame([[nome, funcao]], columns=["Nome", "Funcao"])
+    df = pd.concat([df, novo_colaborador], ignore_index=True)
+    data_manager.salvar_colaboradores(df)
+    return True
 
 def remover_colaborador(nome: str) -> bool:
+    if st.session_state.get('role') != 'Admin':
+        st.error("Permissão negada: apenas administradores podem remover colaboradores.")
+        return False
     df = data_manager.carregar_colaboradores()
     initial_len = len(df)
     df = df[df["Nome"] != nome]
@@ -127,35 +161,51 @@ def remover_colaborador(nome: str) -> bool:
     return len(df) < initial_len
 
 def editar_colaborador(nome_original: str, novo_nome: str, nova_funcao: str) -> bool:
+    if st.session_state.get('role') != 'Admin':
+        st.error("Permissão negada: apenas administradores podem editar colaboradores.")
+        return False
     df = data_manager.carregar_colaboradores()
+    novo_nome = novo_nome.strip()
+    if not novo_nome:
+        st.error("O nome do colaborador não pode estar vazio.")
+        return False
+    if any(char in novo_nome for char in ";/\\|@#$%&*"):
+        st.error("O nome do colaborador contém caracteres inválidos.")
+        return False
     if nome_original in df["Nome"].values:
         if novo_nome and novo_nome != nome_original and novo_nome in df["Nome"].values:
             st.error("O novo nome já está em uso por outro colaborador.")
             return False
-        
         idx = df[df["Nome"] == nome_original].index[0]
         df.loc[idx, "Nome"] = novo_nome
         df.loc[idx, "Funcao"] = nova_funcao
         data_manager.salvar_colaboradores(df)
-
         if novo_nome and novo_nome != nome_original:
             df_pontos = data_manager.carregar_pontos()
             df_pontos.loc[df_pontos["Nome"] == nome_original, "Nome"] = novo_nome
             data_manager.salvar_pontos(df_pontos)
-            
         return True
     return False
 
 def registrar_evento(nome: str, acao: AcaoPonto, data_str: Optional[str] = None, hora_str: Optional[str] = None) -> bool:
+    # Permissão: apenas Admin pode registrar eventos para outros colaboradores
+    if st.session_state.get('role') != 'Admin' and st.session_state.get('role') != 'Viewer':
+        st.error("Permissão negada: apenas administradores podem registrar eventos.")
+        return False
     now = datetime.now()
     data_str = data_str or now.strftime("%Y-%m-%d")
     hora_str = hora_str or now.strftime("%H:%M")
-
+    if not nome or not acao:
+        st.error("Nome e ação são obrigatórios.")
+        return False
+    try:
+        datetime.strptime(hora_str, "%H:%M")
+    except Exception:
+        st.error("Hora inválida.")
+        return False
     df_pontos = data_manager.carregar_pontos()
-    
     df_mesmo_dia = df_pontos[(df_pontos["Nome"] == nome) & (df_pontos["Data"] == data_str)]
     hora_nova = datetime.strptime(hora_str, "%H:%M")
-
     for _, row in df_mesmo_dia.iterrows():
         try:
             hora_existente = datetime.strptime(str(row["Hora"])[:5], "%H:%M")
@@ -164,13 +214,15 @@ def registrar_evento(nome: str, acao: AcaoPonto, data_str: Optional[str] = None,
                 return False
         except (ValueError, TypeError):
             continue
-
     novo_registro = pd.DataFrame([[nome, acao.value, data_str, hora_str]], columns=["Nome", "Ação", "Data", "Hora"])
     df_pontos = pd.concat([df_pontos, novo_registro], ignore_index=True)
     data_manager.salvar_pontos(df_pontos)
     return True
 
 def atualizar_ponto(index: int, nome: str, acao: AcaoPonto, data: str, hora: str) -> bool:
+    if st.session_state.get('role') != 'Admin':
+        st.error("Permissão negada: apenas administradores podem atualizar registros de ponto.")
+        return False
     df = data_manager.carregar_pontos()
     if 0 <= index < len(df):
         df.loc[index, "Nome"] = nome
@@ -182,6 +234,9 @@ def atualizar_ponto(index: int, nome: str, acao: AcaoPonto, data: str, hora: str
     return False
 
 def deletar_ponto(index: int) -> bool:
+    if st.session_state.get('role') != 'Admin':
+        st.error("Permissão negada: apenas administradores podem excluir registros de ponto.")
+        return False
     df = data_manager.carregar_pontos()
     if 0 <= index < len(df):
         df = df.drop(index).reset_index(drop=True)
@@ -361,7 +416,8 @@ def mostrar_pagina_registro():
     """)
 
     df_colab = data_manager.carregar_colaboradores()
-    nomes = [""] + df_colab["Nome"].tolist()
+    # MODIFICAÇÃO: Adicionado sorted() para ordenar a lista de nomes
+    nomes = [""] + sorted(df_colab["Nome"].tolist())
 
     with st.container(border=True):
         nome_selecionado = st.selectbox(

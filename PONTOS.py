@@ -17,6 +17,7 @@ def safe_csv_write(filepath):
             yield
     else:
         yield
+
 import holidays
 from collections import defaultdict
 from enum import Enum
@@ -40,7 +41,7 @@ st.set_page_config(
 ARQ_PONTO = "registro_ponto.csv"
 ARQ_COLAB = "colaboradores.csv"
 ARQ_FERIADOS = "feriados.csv"
-ARQ_FERIADOS_IGNORADOS = "feriados_ignorados.csv" # NOVO: Arquivo para feriados do sistema a serem ignorados
+ARQ_FERIADOS_IGNORADOS = "feriados_ignorados.csv"
 FOTOS_DIR = "fotos_colaboradores"
 
 class AcaoPonto(str, Enum):
@@ -50,13 +51,12 @@ class AcaoPonto(str, Enum):
     RETORNO = "Retorno"
 
 class DataManager:
-    # --- MODIFICADO ---
     def __init__(self, arq_colab: str, arq_ponto: str, fotos_dir: str, arq_feriados: str, arq_feriados_ignorados: str):
         self.arq_colab = arq_colab
         self.arq_ponto = arq_ponto
         self.fotos_dir = fotos_dir
         self.arq_feriados = arq_feriados
-        self.arq_feriados_ignorados = arq_feriados_ignorados # NOVO
+        self.arq_feriados_ignorados = arq_feriados_ignorados
         self._inicializar_arquivos()
 
     def _inicializar_arquivos(self):
@@ -67,7 +67,6 @@ class DataManager:
             pd.DataFrame(columns=["Nome", "Ação", "Data", "Hora"]).to_csv(self.arq_ponto, index=False)
         if not os.path.exists(self.arq_feriados):
             pd.DataFrame(columns=["Data", "Descricao"]).to_csv(self.arq_feriados, index=False)
-        # NOVO: Garante que o arquivo de feriados ignorados exista
         if not os.path.exists(self.arq_feriados_ignorados):
             pd.DataFrame(columns=["Data", "Descricao"]).to_csv(self.arq_feriados_ignorados, index=False)
         
@@ -110,7 +109,6 @@ class DataManager:
             df.to_csv(self.arq_feriados, index=False)
         st.cache_data.clear()
         
-    # --- NOVAS FUNÇÕES PARA GERENCIAR FERIADOS IGNORADOS ---
     @st.cache_data(ttl=60)
     def carregar_feriados_ignorados(_self) -> pd.DataFrame:
         try:
@@ -125,12 +123,9 @@ class DataManager:
             df.to_csv(self.arq_feriados_ignorados, index=False)
         st.cache_data.clear()
 
-# --- MODIFICADO ---
-# Instancia o DataManager passando também o novo arquivo de feriados ignorados
 data_manager = DataManager(ARQ_COLAB, ARQ_PONTO, FOTOS_DIR, ARQ_FERIADOS, ARQ_FERIADOS_IGNORADOS)
 
 def adicionar_colaborador(nome: str, funcao: str) -> bool:
-    # Permissão: apenas Admin pode adicionar
     if st.session_state.get('role') != 'Admin':
         st.error("Permissão negada: apenas administradores podem adicionar colaboradores.")
         return False
@@ -188,8 +183,7 @@ def editar_colaborador(nome_original: str, novo_nome: str, nova_funcao: str) -> 
     return False
 
 def registrar_evento(nome: str, acao: AcaoPonto, data_str: Optional[str] = None, hora_str: Optional[str] = None) -> bool:
-    # Permissão: apenas Admin pode registrar eventos para outros colaboradores
-    if st.session_state.get('role') != 'Admin' and st.session_state.get('role') != 'Viewer':
+    if st.session_state.get('role') != 'Admin':
         st.error("Permissão negada: apenas administradores podem registrar eventos.")
         return False
     now = datetime.now()
@@ -293,17 +287,14 @@ def get_periodo_do_dia(dt_object: datetime) -> str:
     else:
         return "Noite"
 
-# --- FUNÇÃO MODIFICADA ---
 def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     extras_50_datas = defaultdict(list)
     extras_100_datas = defaultdict(list)
     br_holidays = holidays.Brazil(state='CE')
 
-    # Carrega feriados personalizados e os ignorados
     df_feriados_personalizados = data_manager.carregar_feriados()
     feriados_personalizados = set(df_feriados_personalizados['Data'])
     
-    # NOVO: Carrega os feriados do sistema que devem ser ignorados
     df_feriados_ignorados = data_manager.carregar_feriados_ignorados()
     feriados_ignorados = set(df_feriados_ignorados['Data'])
 
@@ -339,21 +330,19 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                     fim_do_dia = pd.to_datetime(data_atual) + timedelta(days=1)
                     fim_calculo = min(fim_do_dia, fim)
 
-                    if inicio_calculo >= fim: break
+                    if inicio_calculo >= fim_calculo: 
+                        break
                     
-                    # --- LÓGICA DE HORA EXTRA 100% ATUALIZADA ---
-                    # Verifica se é um feriado do sistema (e não está na lista de ignorados)
                     is_system_holiday = (data_atual in br_holidays) and (data_atual not in feriados_ignorados)
-                    # Verifica se é um feriado personalizado
                     is_custom_holiday = data_atual in feriados_personalizados
                     
-                    if is_system_holiday or is_custom_holiday or dia_semana == 6: # Feriado Válido ou Domingo
+                    if is_system_holiday or is_custom_holiday or dia_semana == 6:  # Feriado Válido ou Domingo
                         duracao_100 = fim_calculo - inicio_calculo
                         if duracao_100.total_seconds() > 0:
                             periodo = get_periodo_do_dia(inicio_calculo)
                             extras_100_datas[data_atual].append({"duracao": duracao_100, "inicio_turno": inicio, "periodo": periodo})
                     
-                    else: # Dias de semana (Seg-Sáb)
+                    else:  # Dias de semana (Seg-Sáb)
                         limite_inicio_expediente = pd.Timestamp(data_atual).replace(hour=7, minute=0)
                         
                         if inicio_calculo < limite_inicio_expediente:
@@ -368,13 +357,13 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                                 })
                             inicio_calculo = max(inicio_calculo, limite_inicio_expediente)
                         
-                        if dia_semana == 5: # Sábado
+                        if dia_semana == 5:  # Sábado
                             duracao_50 = fim_calculo - inicio_calculo
                             if duracao_50.total_seconds() > 0:
                                 periodo = get_periodo_do_dia(inicio_calculo)
                                 extras_50_datas[data_atual].append({"duracao": duracao_50, "inicio_turno": inicio, "periodo": periodo})
                         
-                        elif dia_semana == 4: # Sexta-feira
+                        elif dia_semana == 4:  # Sexta-feira
                             limite = pd.Timestamp(data_atual).replace(hour=16, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -383,7 +372,7 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                                     periodo_he = get_periodo_do_dia(overtime_start)
                                     extras_50_datas[data_atual].append({"duracao": overtime_duration, "inicio_turno": inicio, "periodo": periodo_he})
 
-                        elif 0 <= dia_semana <= 3: # Segunda a Quinta
+                        elif 0 <= dia_semana <= 3:  # Segunda a Quinta
                             limite = pd.Timestamp(data_atual).replace(hour=17, minute=0)
                             if fim_calculo > limite:
                                 overtime_start = max(inicio_calculo, limite)
@@ -407,7 +396,7 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
 def mostrar_pagina_registro():
     st.header("Registro de Ponto")
     st.markdown("""
-    Informe manually a data e hora da entrada. O sistema registrará automaticamente:
+    Informe manualmente a data e hora da entrada. O sistema registrará automaticamente:
     - Pausa às 12:00
     - Retorno às 13:00
     - Saída às 17:00 (segunda a quinta) ou 16:00 (sexta)
@@ -438,7 +427,7 @@ def mostrar_pagina_registro():
                 break
 
         if foto_path:
-           st.image(foto_path, caption=f"Olá, {nome_selecionado.split(' ')[0]}!", width=100)
+            st.image(foto_path, caption=f"Olá, {nome_selecionado.split(' ')[0]}!", width=100)
 
         st.markdown("---")
 
@@ -480,9 +469,9 @@ def mostrar_pagina_registro():
 
             st.markdown("🌞 **Vigia do dia?** Use o botão abaixo para registrar das 06:00 às 18:00 no mesmo dia.")
             if st.button("Registrar Turno Diurno (06:00 - 18:00)", use_container_width=True):
-               if registrar_evento(nome_selecionado, AcaoPonto.ENTRADA, data_str, "06:00"):
-                   registrar_evento(nome_selecionado, AcaoPonto.SAIDA, data_str, "18:00")
-                   st.success(f"Turno diurno registrado com sucesso para {nome_selecionado}.")
+                if registrar_evento(nome_selecionado, AcaoPonto.ENTRADA, data_str, "06:00"):
+                    registrar_evento(nome_selecionado, AcaoPonto.SAIDA, data_str, "18:00")
+                    st.success(f"Turno diurno registrado com sucesso para {nome_selecionado}.")
 
         except ValueError:
             if hora_input:
@@ -597,7 +586,6 @@ def mostrar_pagina_relatorios():
     br_holidays = holidays.Brazil(state='CE')
     df_feriados = data_manager.carregar_feriados()
     feriados_personalizados = set(df_feriados['Data'])
-    # NOVO: Carrega feriados ignorados para não contar falta erroneamente se o feriado for ignorado
     df_feriados_ignorados = data_manager.carregar_feriados_ignorados()
     feriados_ignorados = set(df_feriados_ignorados['Data'])
 
@@ -608,7 +596,6 @@ def mostrar_pagina_relatorios():
 
     for data in datas_periodo:
         data_atual = data.date()
-        # --- CONDIÇÃO DE FALTA ATUALIZADA ---
         is_system_holiday = data_atual in br_holidays and data_atual not in feriados_ignorados
         is_custom_holiday = data_atual in feriados_personalizados
 
@@ -653,7 +640,6 @@ def mostrar_pagina_relatorios():
         (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
     ]
 
-    # NOVO: Lista para armazenar dados de HE para o relatório HTML
     dados_horas_extras = []
     any_overtime_found = False
     for _, colaborador in df_colab.iterrows():
@@ -673,7 +659,6 @@ def mostrar_pagina_relatorios():
 
             if he_50_info["total"].total_seconds() > 0 or he_100_info["total"].total_seconds() > 0:
                 any_overtime_found = True
-                # MODIFICADO: Salva os dados de HE se existirem
                 dados_horas_extras.append({
                     "nome": nome_colab,
                     "he_50": formatar_timedelta(he_50_info["total"]),
@@ -777,13 +762,47 @@ def mostrar_pagina_relatorios():
 
                 if he_50_info["datas"]:
                     with st.expander("Ver detalhes das Horas Extras (50%)"):
-                        # ... (código existente sem alterações)
-                        pass
+                        registros_flat = []
+                        for data, registros in he_50_info["datas"].items():
+                            for reg_dict in registros:
+                                registros_flat.append({
+                                    'data_evento': data,
+                                    'duracao': reg_dict['duracao'],
+                                    'inicio_turno': reg_dict['inicio_turno'],
+                                    'periodo': reg_dict['periodo']
+                                })
+                        
+                        registros_sorted = sorted(registros_flat, key=lambda x: (x['data_evento'], x['inicio_turno']))
+                        for reg in registros_sorted:
+                            data_evento_str = reg['data_evento'].strftime('%d/%m/%Y')
+                            duracao_str = formatar_timedelta(reg['duracao'])
+                            periodo_str = reg['periodo']
+                            contexto_str = ""
+                            if reg['data_evento'] != reg['inicio_turno'].date():
+                                contexto_str = f" `(Ref. turno de {reg['inicio_turno'].strftime('%d/%m %H:%M')})`"
+                            st.markdown(f"- **Data:** {data_evento_str} - **Período:** {periodo_str} - **Duração:** {duracao_str}{contexto_str}")
                 
                 if he_100_info["datas"]:
                     with st.expander("Ver detalhes das Horas Extras (100%)"):
-                        # ... (código existente sem alterações)
-                        pass
+                        registros_flat = []
+                        for data, registros in he_100_info["datas"].items():
+                            for reg_dict in registros:
+                                registros_flat.append({
+                                    'data_evento': data,
+                                    'duracao': reg_dict['duracao'],
+                                    'inicio_turno': reg_dict['inicio_turno'],
+                                    'periodo': reg_dict['periodo']
+                                })
+                        
+                        registros_sorted = sorted(registros_flat, key=lambda x: (x['data_evento'], x['inicio_turno']))
+                        for reg in registros_sorted:
+                            data_evento_str = reg['data_evento'].strftime('%d/%m/%Y')
+                            duracao_str = formatar_timedelta(reg['duracao'])
+                            periodo_str = reg['periodo']
+                            contexto_str = ""
+                            if reg['data_evento'] != reg['inicio_turno'].date():
+                                contexto_str = f" `(Ref. turno de {reg['inicio_turno'].strftime('%d/%m %H:%M')})`"
+                            st.markdown(f"- **Data:** {data_evento_str} - **Período:** {periodo_str} - **Duração:** {duracao_str}{contexto_str}")
                 
                 with st.expander("Ver regras de cálculo de Horas Extras"):
                     st.markdown("""
@@ -856,7 +875,6 @@ def mostrar_pagina_relatorios():
     else:
         st.info("Nenhum registro de ponto encontrado no período selecionado.")
     
-    # NOVA SEÇÃO: Gerar Relatório HTML
     st.markdown("---")
     st.subheader("Gerar Relatório para Diretoria")
     if st.session_state.get('role') == 'Admin':
@@ -924,7 +942,6 @@ def mostrar_pagina_relatorios():
         )
     else:
         st.info("A exportação de dados está disponível apenas para administradores.")
-
 
 def mostrar_pagina_ajuste():
     st.header("Ajuste Manual de Ponto")
@@ -1001,7 +1018,6 @@ def mostrar_pagina_ajuste():
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
 
-# NOVA FUNÇÃO
 def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_horas: pd.DataFrame, dados_he: list, faltas: dict):
     """
     Gera um relatório consolidado em HTML com base nos dados fornecidos.
@@ -1161,7 +1177,6 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
     
     return full_html
 
-# --- PÁGINA COMPLETAMENTE REESCRITA ---
 def mostrar_pagina_feriados():
     st.header("Gerenciar Feriados")
     st.markdown("Adicione feriados personalizados ou gerencie os feriados automáticos do sistema.")
@@ -1263,7 +1278,6 @@ def mostrar_pagina_feriados():
                         st.warning(f"Feriado '{row['Descricao']}' reativado.")
                         st.rerun()
 
-# --- NOVO: Tela de Login ---
 def show_login_screen():
     st.header("Acesso ao Sistema de Ponto")
     st.markdown("Por favor, insira a chave de acesso para continuar.")
@@ -1273,7 +1287,6 @@ def show_login_screen():
         admin_login_button = st.form_submit_button("Entrar como Administrador")
 
         if admin_login_button:
-            # st.secrets.get("ACCESS_KEY") busca a chave no arquivo secrets.toml
             if password == st.secrets.get("ACCESS_KEY"):
                 st.session_state['authenticated'] = True
                 st.session_state['role'] = 'Admin'
@@ -1289,25 +1302,19 @@ def show_login_screen():
         st.info("Acessando em modo de visualização.")
         st.rerun()
 
-
-# --- MODIFICADO: Função principal para controlar o acesso ---
 def main():
     st.title("Controle de Ponto")
     
-    # Inicializa o estado da sessão se ainda não existir
     if 'authenticated' not in st.session_state:
         st.session_state['authenticated'] = False
         st.session_state['role'] = None
 
-    # Se o usuário não estiver autenticado, mostra a tela de login
     if not st.session_state.get('authenticated'):
         show_login_screen()
     else:
-        # Se o usuário estiver autenticado, mostra a aplicação principal
         st.sidebar.title(f"Bem-vindo, {st.session_state['role']}!")
         st.sidebar.markdown("---")
 
-        # Define as páginas disponíveis para cada tipo de usuário
         admin_pages = {
             "Registrar Ponto": mostrar_pagina_registro,
             "Gerenciar Colaboradores": mostrar_pagina_gerenciar,
@@ -1320,23 +1327,19 @@ def main():
             "Relatórios": mostrar_pagina_relatorios,
         }
 
-        # Seleciona o conjunto de páginas com base na função do usuário
         if st.session_state['role'] == 'Admin':
             pages_to_show = admin_pages
-        else: # Viewer
+        else:
             pages_to_show = viewer_pages
 
-        # Cria o menu de navegação na barra lateral
         aba_selecionada = st.sidebar.radio("Navegação", list(pages_to_show.keys()))
         
-        # Botão de Logout
         st.sidebar.markdown("---")
         if st.sidebar.button("Sair (Logout)"):
             st.session_state['authenticated'] = False
             st.session_state['role'] = None
             st.rerun()
 
-        # Exibe a página selecionada
         pagina_func = pages_to_show.get(aba_selecionada)
         if pagina_func:
             pagina_func()

@@ -416,7 +416,6 @@ def mostrar_pagina_registro():
     """)
 
     df_colab = data_manager.carregar_colaboradores()
-    # MODIFICAÇÃO: Adicionado sorted() para ordenar a lista de nomes
     nomes = [""] + sorted(df_colab["Nome"].tolist())
 
     with st.container(border=True):
@@ -654,6 +653,8 @@ def mostrar_pagina_relatorios():
         (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
     ]
 
+    # NOVO: Lista para armazenar dados de HE para o relatório HTML
+    dados_horas_extras = []
     any_overtime_found = False
     for _, colaborador in df_colab.iterrows():
         nome_colab = colaborador["Nome"]
@@ -672,6 +673,12 @@ def mostrar_pagina_relatorios():
 
             if he_50_info["total"].total_seconds() > 0 or he_100_info["total"].total_seconds() > 0:
                 any_overtime_found = True
+                # MODIFICADO: Salva os dados de HE se existirem
+                dados_horas_extras.append({
+                    "nome": nome_colab,
+                    "he_50": formatar_timedelta(he_50_info["total"]),
+                    "he_100": formatar_timedelta(he_100_info["total"]),
+                })
                 
                 with st.container(border=True):
                     st.markdown(f"#### {nome_colab}")
@@ -793,7 +800,6 @@ def mostrar_pagina_relatorios():
     else:
         st.info("Nenhum registro encontrado para o colaborador no período selecionado.")
     
-    # ... (restante da função 'mostrar_pagina_relatorios' sem alterações)
     st.markdown("---")
     st.subheader("Histórico Detalhado por Data")
     col_date, col_name_report = st.columns([1, 2])
@@ -850,9 +856,59 @@ def mostrar_pagina_relatorios():
     else:
         st.info("Nenhum registro de ponto encontrado no período selecionado.")
     
+    # NOVA SEÇÃO: Gerar Relatório HTML
+    st.markdown("---")
+    st.subheader("Gerar Relatório para Diretoria")
+    if st.session_state.get('role') == 'Admin':
+        df_pontos_periodo_resumo_html = df_pontos[
+            (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio)) &
+            (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim))
+        ]
+        if not df_pontos_periodo_resumo_html.empty:
+            df_horas_diarias_html = calcular_horas(df_pontos_periodo_resumo_html.copy())
+            df_validas_html = df_horas_diarias_html[df_horas_diarias_html['Horas Trabalhadas'] != 'Registro Incompleto'].copy()
+
+            if not df_validas_html.empty:
+                def hms_to_seconds_html(t):
+                    try: h, m = map(int, t.split(':')); return (h * 3600) + (m * 60)
+                    except (ValueError, TypeError): return 0
+                
+                df_validas_html['Segundos'] = df_validas_html['Horas Trabalhadas'].apply(hms_to_seconds_html)
+                resumo_segundos_html = df_validas_html.groupby('Nome')['Segundos'].sum().reset_index()
+
+                def seconds_to_hms_html(s):
+                    s = int(s); horas = s // 3600; minutos = (s % 3600) // 60
+                    return f"{horas:02}:{minutos:02}"
+
+                resumo_segundos_html['Total de Horas'] = resumo_segundos_html['Segundos'].apply(seconds_to_hms_html)
+                df_resumo_final_html = resumo_segundos_html[['Nome', 'Total de Horas']]
+
+                html_content = gerar_relatorio_html(
+                    data_inicio=data_inicio,
+                    data_fim=data_fim,
+                    df_resumo_horas=df_resumo_final_html,
+                    dados_he=dados_horas_extras,
+                    faltas=faltas_encontradas
+                )
+                
+                file_name = f"Relatorio_Ponto_{data_inicio.strftime('%Y%m%d')}_{data_fim.strftime('%Y%m%d')}.html"
+                
+                st.download_button(
+                    label="📥 Baixar Relatório Detalhado (HTML)",
+                    data=html_content.encode('utf-8'),
+                    file_name=file_name,
+                    mime='text/html',
+                    use_container_width=True
+                )
+            else:
+                st.info("Não há dados completos no período para gerar o relatório.")
+        else:
+            st.info("Nenhum registro encontrado no período para gerar o relatório.")
+    else:
+        st.info("A geração de relatórios para a diretoria está disponível apenas para administradores.")
+
     st.markdown("---")
     st.subheader("Exportar Registros")
-    # Apenas o admin pode exportar os dados
     if st.session_state.get('role') == 'Admin':
         st.download_button(
             label="Baixar Registros de Ponto (registro_ponto.csv)",
@@ -944,6 +1000,166 @@ def mostrar_pagina_ajuste():
                     st.error("Formato de Data (DD/MM/YYYY) ou Hora (HH:MM) inválido.")
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
+
+# NOVA FUNÇÃO
+def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_horas: pd.DataFrame, dados_he: list, faltas: dict):
+    """
+    Gera um relatório consolidado em HTML com base nos dados fornecidos.
+    """
+    # --- Estilo CSS para o Relatório ---
+    html_style = """
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 20px; 
+            background-color: #f9f9f9;
+            color: #333;
+        }
+        .report-container { 
+            max-width: 900px;
+            margin: auto;
+            background-color: #fff;
+            border: 1px solid #ddd; 
+            padding: 30px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+        }
+        .header { 
+            text-align: center; 
+            margin-bottom: 40px; 
+            border-bottom: 2px solid #eee;
+            padding-bottom: 20px;
+        }
+        .header h1 { 
+            margin: 0;
+            color: #2c3e50;
+            font-size: 24px;
+        }
+        .header p { 
+            margin: 5px 0 0 0; 
+            color: #555;
+            font-size: 14px;
+        }
+        .section { 
+            margin-top: 35px; 
+        }
+        .section h2 { 
+            color: #34495e; 
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 10px;
+            font-size: 18px;
+        }
+        .section p.description {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        th, td { 
+            border: 1px solid #ddd; 
+            padding: 10px; 
+            text-align: left; 
+        }
+        th { 
+            background-color: #f2f5f7;
+            font-weight: 600;
+            color: #444;
+        }
+        tr:nth-child(even) { 
+            background-color: #fcfcfc; 
+        }
+        .footer { 
+            text-align: center; 
+            margin-top: 40px; 
+            padding-top: 20px;
+            border-top: 2px solid #eee;
+            font-size: 12px; 
+            color: #888; 
+        }
+    </style>
+    """
+
+    # --- Formatação de Datas ---
+    str_data_inicio = data_inicio.strftime('%d/%m/%Y')
+    str_data_fim = data_fim.strftime('%d/%m/%Y')
+    data_geracao = datetime.now().strftime('%d/%m/%Y às %H:%M:%S')
+
+    # --- Tabela de Horas Trabalhadas ---
+    if df_resumo_horas.empty:
+        tabela_horas_html = "<p>Não há registros de horas consolidadas para o período.</p>"
+    else:
+        tabela_horas_html = df_resumo_horas.to_html(index=False, classes="table", border=0)
+
+    # --- Tabela de Horas Extras ---
+    if not dados_he:
+        tabela_he_html = "<p>Nenhum registro de hora extra no período para os colaboradores analisados.</p>"
+    else:
+        he_rows = "".join([f"<tr><td>{item['nome']}</td><td>{item['he_50']}</td><td>{item['he_100']}</td></tr>" for item in dados_he])
+        tabela_he_html = f"""
+        <table class="table">
+            <thead><tr><th>Colaborador</th><th>Horas Extras (50%)</th><th>Horas Extras (100%)</th></tr></thead>
+            <tbody>{he_rows}</tbody>
+        </table>
+        """
+
+    # --- Tabela de Faltas ---
+    if not faltas:
+        tabela_faltas_html = "<p>Nenhuma falta registrada no período.</p>"
+    else:
+        faltas_rows = ""
+        for nome, datas in sorted(faltas.items()):
+            datas_str = ", ".join(sorted(list(set(datas))))
+            faltas_rows += f"<tr><td>{nome}</td><td>{datas_str}</td></tr>"
+        tabela_faltas_html = f"""
+        <table class="table">
+            <thead><tr><th>Colaborador</th><th>Datas das Faltas</th></tr></thead>
+            <tbody>{faltas_rows}</tbody>
+        </table>
+        """
+
+    # --- Montagem do Corpo do HTML ---
+    html_body = f"""
+    <div class="report-container">
+        <div class="header">
+            <h1>Relatório de Ponto Consolidado</h1>
+            <p>Este documento apresenta um resumo das atividades dos colaboradores.</p>
+            <p><strong>Período de Apuração:</strong> de {str_data_inicio} a {str_data_fim}</p>
+        </div>
+
+        <div class="section">
+            <h2>1. Resumo de Horas Trabalhadas</h2>
+            <p class="description">Total de horas trabalhadas por colaborador no período, excluindo registros incompletos.</p>
+            {tabela_horas_html}
+        </div>
+
+        <div class="section">
+            <h2>2. Horas Extras Apuradas</h2>
+            <p class="description">Total de horas extras para colaboradores elegíveis (excluindo vigias), segregadas por percentual.</p>
+            {tabela_he_html}
+        </div>
+
+        <div class="section">
+            <h2>3. Relatório de Faltas</h2>
+            <p class="description">Colaboradores com ausência de registro de "Entrada" em dias úteis (Seg-Sex), desconsiderando feriados.</p>
+            {tabela_faltas_html}
+        </div>
+
+        <div class="footer">
+            <p>Relatório gerado em {data_geracao} pelo Sistema de Controle de Ponto.</p>
+            <p>Desenvolvido Por Francelino Neto Santos.</p>
+        </div>
+    </div>
+    """
+
+    # --- HTML Final ---
+    full_html = f"<!DOCTYPE html><html lang='pt-BR'><head><meta charset='UTF-8'><title>Relatório de Ponto - {str_data_inicio} a {str_data_fim}</title>{html_style}</head><body>{html_body}</body></html>"
+    
+    return full_html
 
 # --- PÁGINA COMPLETAMENTE REESCRITA ---
 def mostrar_pagina_feriados():

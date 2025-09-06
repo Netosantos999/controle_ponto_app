@@ -924,31 +924,36 @@ def mostrar_pagina_relatorios():
     st.markdown("---")
     st.subheader("Gerar Relatório para Diretoria")
     if st.session_state.get('role') == 'Admin':
-        # <<< INÍCIO DA MODIFICAÇÃO PARA INCLUIR TODOS OS NOMES >>>
+        # <<< INÍCIO DA MODIFICAÇÃO PARA O RELATÓRIO HTML >>>
 
-        # 1. Preparar a lista completa de colaboradores (baseada no filtro de função)
-        df_todos_colaboradores = df_colab_filtrado[['Nome']].copy().drop_duplicates().sort_values(by='Nome')
+        # 1. Preparar a lista de colaboradores (baseada no filtro de função) para as diferentes seções
+        df_colab_para_relatorio = df_colab_filtrado[['Nome', 'Funcao']].drop_duplicates().sort_values(by='Nome')
 
-        # 2. Preparar dados de Horas Extras para TODOS os colaboradores
+        # 2. Preparar dados de Horas Extras para colaboradores ELEGÍVEIS (sem vigias)
         dados_he_completos = []
-        for nome_colab in df_todos_colaboradores['Nome']:
-            # Pega os dados já calculados e cacheados anteriormente
+        for index, row in df_colab_para_relatorio.iterrows():
+            nome_colab = row['Nome']
+            funcao_colab = row['Funcao']
+
+            # Adicionada a verificação para pular vigias APENAS para a seção de HE
+            if "vigia" in str(funcao_colab).lower():
+                continue
+
             resultado_extras = calcular_horas_extras_cacheavel(
-                nome_colab, 
-                data_inicio.strftime('%Y-%m-%d'), 
+                nome_colab,
+                data_inicio.strftime('%Y-%m-%d'),
                 data_fim.strftime('%Y-%m-%d')
             )
             he_50_info = resultado_extras.get("50%", {"total": timedelta(), "datas": {}})
             he_100_info = resultado_extras.get("100%", {"total": timedelta(), "datas": {}})
-            
-            # Adiciona o colaborador à lista, mesmo que ele não tenha horas extras
+
             dados_he_completos.append({
                 "nome": nome_colab,
                 "he_50": formatar_timedelta(he_50_info["total"]),
                 "he_100": formatar_timedelta(he_100_info["total"]),
             })
-        
-        # 3. Preparar dados de Horas Totais para TODOS os colaboradores
+
+        # 3. Preparar dados de Horas Totais para TODOS os colaboradores do filtro
         # O df_pontos_periodo_resumo já foi filtrado corretamente acima na página
         df_horas_diarias_html = calcular_horas(df_pontos_periodo_resumo.copy())
         df_validas_html = df_horas_diarias_html[df_horas_diarias_html['Horas Trabalhadas'] != 'Registro Incompleto'].copy()
@@ -974,7 +979,7 @@ def mostrar_pagina_relatorios():
             
             # Faz um merge para garantir que todos os colaboradores estejam na tabela final
             df_resumo_final_html = pd.merge(
-                df_todos_colaboradores,
+                df_colab_para_relatorio[['Nome']], # Usa a lista completa de nomes do filtro
                 resumo_segundos_html[['Nome', 'Total de Horas']],
                 on='Nome',
                 how='left'
@@ -982,15 +987,15 @@ def mostrar_pagina_relatorios():
 
         else:
             # Se não houver nenhum registro válido, cria um dataframe com todos os nomes e zero horas
-            df_resumo_final_html = df_todos_colaboradores.copy()
+            df_resumo_final_html = df_colab_para_relatorio[['Nome']].copy()
             df_resumo_final_html['Total de Horas'] = '00:00'
 
         # 4. Gerar o relatório com os dados completos
         html_content = gerar_relatorio_html(
             data_inicio=data_inicio,
             data_fim=data_fim,
-            df_resumo_horas=df_resumo_final_html,   # <--- Usa o dataframe completo
-            dados_he=dados_he_completos,           # <--- Usa a lista completa
+            df_resumo_horas=df_resumo_final_html,   # <--- Usa o dataframe com TODOS os colaboradores
+            dados_he=dados_he_completos,           # <--- Usa a lista FILTRADA (sem vigias)
             faltas=faltas_encontradas
         )
         

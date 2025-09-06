@@ -34,6 +34,7 @@ ARQ_PONTO = "registro_ponto.csv"
 ARQ_COLAB = "colaboradores.csv"
 ARQ_FERIADOS = "feriados.csv"
 ARQ_FERIADOS_IGNORADOS = "feriados_ignorados.csv"
+ARQ_JUSTIFICATIVAS = "justificativas_faltas.csv" # NOVO ARQUIVO
 FOTOS_DIR = "fotos_colaboradores"
 
 # Utilitário para lock de arquivo
@@ -53,12 +54,13 @@ class AcaoPonto(str, Enum):
     RETORNO = "Retorno"
 
 class DataManager:
-    def __init__(self, arq_colab: str, arq_ponto: str, fotos_dir: str, arq_feriados: str, arq_feriados_ignorados: str):
+    def __init__(self, arq_colab: str, arq_ponto: str, fotos_dir: str, arq_feriados: str, arq_feriados_ignorados: str, arq_justificativas: str):
         self.arq_colab = arq_colab
         self.arq_ponto = arq_ponto
         self.fotos_dir = fotos_dir
         self.arq_feriados = arq_feriados
         self.arq_feriados_ignorados = arq_feriados_ignorados
+        self.arq_justificativas = arq_justificativas # NOVO
         self._inicializar_arquivos()
 
     def _inicializar_arquivos(self):
@@ -71,7 +73,10 @@ class DataManager:
             pd.DataFrame(columns=["Data", "Descricao"]).to_csv(self.arq_feriados, index=False)
         if not os.path.exists(self.arq_feriados_ignorados):
             pd.DataFrame(columns=["Data", "Descricao"]).to_csv(self.arq_feriados_ignorados, index=False)
-        
+        # NOVO - Inicializa arquivo de justificativas
+        if not os.path.exists(self.arq_justificativas):
+            pd.DataFrame(columns=["Nome", "Data", "Status"]).to_csv(self.arq_justificativas, index=False)
+
         os.makedirs(self.fotos_dir, exist_ok=True)
 
     @st.cache_data(ttl=30)
@@ -110,7 +115,7 @@ class DataManager:
         with safe_csv_write(self.arq_feriados):
             df.to_csv(self.arq_feriados, index=False)
         st.cache_data.clear()
-        
+
     @st.cache_data(ttl=60)
     def carregar_feriados_ignorados(_self) -> pd.DataFrame:
         try:
@@ -125,7 +130,21 @@ class DataManager:
             df.to_csv(self.arq_feriados_ignorados, index=False)
         st.cache_data.clear()
 
-data_manager = DataManager(ARQ_COLAB, ARQ_PONTO, FOTOS_DIR, ARQ_FERIADOS, ARQ_FERIADOS_IGNORADOS)
+    # --- NOVAS FUNÇÕES PARA GERENCIAR JUSTIFICATIVAS ---
+    @st.cache_data(ttl=30)
+    def carregar_justificativas(_self) -> pd.DataFrame:
+        try:
+            return pd.read_csv(_self.arq_justificativas)
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            return pd.DataFrame(columns=["Nome", "Data", "Status"])
+
+    def salvar_justificativas(self, df: pd.DataFrame):
+        with safe_csv_write(self.arq_justificativas):
+            df.to_csv(self.arq_justificativas, index=False)
+        st.cache_data.clear()
+
+
+data_manager = DataManager(ARQ_COLAB, ARQ_PONTO, FOTOS_DIR, ARQ_FERIADOS, ARQ_FERIADOS_IGNORADOS, ARQ_JUSTIFICATIVAS)
 
 def adicionar_colaborador(nome: str, funcao: str) -> bool:
     if st.session_state.get('role') != 'Admin':
@@ -297,7 +316,7 @@ def _parear_registros(df_colaborador: pd.DataFrame) -> List[Tuple[datetime, date
     """
     periodos_trabalho = []
     df_colaborador = df_colaborador.sort_values("DataHora").reset_index(drop=True)
-    
+
     i = 0
     while i < len(df_colaborador):
         row = df_colaborador.iloc[i]
@@ -321,7 +340,7 @@ def _parear_registros(df_colaborador: pd.DataFrame) -> List[Tuple[datetime, date
                 i += 1
         else:
             i += 1
-            
+
     return periodos_trabalho
 
 def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
@@ -374,14 +393,14 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                     he_matinal = min(fim_calculo, limite_inicio) - inicio_calculo
                     if he_matinal.total_seconds() > 0:
                         extras_50_datas[data_atual].append({"duracao": he_matinal, "inicio_turno": inicio_turno, "periodo": get_periodo_do_dia(inicio_calculo)})
-                
+
                 # Regra 2: Sábado - todas as horas são 50%
                 if dia_semana == 5: # Sábado
                     inicio_sabado = max(inicio_calculo, limite_inicio)
                     he_sabado = fim_calculo - inicio_sabado
                     if he_sabado.total_seconds() > 0:
                          extras_50_datas[data_atual].append({"duracao": he_sabado, "inicio_turno": inicio_turno, "periodo": get_periodo_do_dia(inicio_sabado)})
-                
+
                 # Regra 3: Horas após o fim do expediente
                 if 0 <= dia_semana <= 3: # Seg a Qui
                     limite_fim = data_atual_dt.replace(hour=17, minute=0)
@@ -395,12 +414,12 @@ def calcular_horas_extras(df_colaborador: pd.DataFrame) -> Dict[str, Dict[str, A
                     he_tarde = fim_calculo - inicio_he_tarde
                     if he_tarde.total_seconds() > 0:
                         extras_50_datas[data_atual].append({"duracao": he_tarde, "inicio_turno": inicio_turno, "periodo": get_periodo_do_dia(inicio_he_tarde)})
-            
+
             data_atual_dt += timedelta(days=1)
 
     total_50 = sum([item['duracao'] for sublist in extras_50_datas.values() for item in sublist], timedelta())
     total_100 = sum([item['duracao'] for sublist in extras_100_datas.values() for item in sublist], timedelta())
-            
+
     return {
         "50%": {"total": total_50, "datas": extras_50_datas},
         "100%": {"total": total_100, "datas": extras_100_datas},
@@ -413,20 +432,20 @@ def calcular_horas_extras_cacheavel(nome_colaborador, data_inicio_str, data_fim_
     Carrega os dados necessários e chama a função de cálculo principal.
     """
     df_pontos = data_manager.carregar_pontos()
-    
+
     # Filtra os dados aqui dentro para que o cache dependa apenas dos argumentos
     df_pontos_periodo = df_pontos[
         (pd.to_datetime(df_pontos["Data"]) >= pd.to_datetime(data_inicio_str)) &
         (pd.to_datetime(df_pontos["Data"]) <= pd.to_datetime(data_fim_str)) &
         (df_pontos["Nome"] == nome_colaborador)
     ]
-    
+
     if df_pontos_periodo.empty:
         return {
             "50%": {"total": timedelta(), "datas": {}},
             "100%": {"total": timedelta(), "datas": {}},
         }
-        
+
     return calcular_horas_extras(df_pontos_periodo.copy())
 
 @st.cache_data(ttl=600) # Adiciona cache para otimizar
@@ -439,10 +458,10 @@ def calcular_faltas(data_inicio, data_fim, df_colab, df_pontos):
     feriados_personalizados = set(df_feriados['Data'])
     df_feriados_ignorados = data_manager.carregar_feriados_ignorados()
     feriados_ignorados = set(df_feriados_ignorados['Data'])
-    
+
     colabs_normais = df_colab[~df_colab['Funcao'].str.contains("vigia", case=False, na=False)]
     nomes_esperados_set = set(colabs_normais['Nome'])
-    
+
     datas_periodo = pd.date_range(start=data_inicio, end=data_fim)
     faltas_por_colaborador = defaultdict(list)
 
@@ -454,16 +473,16 @@ def calcular_faltas(data_inicio, data_fim, df_colab, df_pontos):
         # Considera apenas dias úteis (Seg-Sex) que não são feriados
         if data.weekday() < 5 and not is_system_holiday and not is_custom_holiday:
             data_str = data.strftime("%Y-%m-%d")
-            
+
             presentes_no_dia = set(df_pontos[
-                (df_pontos['Data'] == data_str) & 
+                (df_pontos['Data'] == data_str) &
                 (df_pontos['Ação'] == AcaoPonto.ENTRADA.value)
             ]['Nome'])
-            
+
             ausentes = nomes_esperados_set - presentes_no_dia
-            
+
             for nome_ausente in ausentes:
-                faltas_por_colaborador[nome_ausente].append(data.strftime('%d/%m/%Y'))
+                faltas_por_colaborador[nome_ausente].append(data.strftime('%Y-%m-%d')) # Salva no formato YYYY-MM-DD
 
     return {nome: datas for nome, datas in faltas_por_colaborador.items() if datas}
 
@@ -508,7 +527,7 @@ def mostrar_pagina_registro():
 
         st.write(f"Colaborador selecionado: **{nome_selecionado}**")
         data_input = st.date_input("Data do Registro:", datetime.today(), key="data_input_manual")
-        
+
         hora_input = st.text_input("Hora da Entrada (HH:MM):", value="07:00", placeholder="Ex: 07:00", key="hora_input_manual")
 
         try:
@@ -577,7 +596,7 @@ def mostrar_pagina_gerenciar():
     if df_colab.empty:
         st.info("Nenhum colaborador cadastrado.")
         return
-        
+
     if 'editing_id' not in st.session_state:
         st.session_state.editing_id = None
 
@@ -587,13 +606,13 @@ def mostrar_pagina_gerenciar():
         colab_funcao = df_colab[df_colab["Funcao"] == funcao_grupo]
         for i, row in colab_funcao.iterrows():
             colab_id = f"colab_{i}"
-            
+
             if st.session_state.editing_id == colab_id:
                 with st.container(border=True):
                     st.write(f"Editando **{row['Nome']}**")
                     novo_nome = st.text_input("Novo nome", value=row["Nome"], key=f"novo_nome_{i}")
                     nova_funcao = st.text_input("Nova função", value=row["Funcao"], key=f"nova_funcao_{i}")
-                    
+
                     col_save, col_cancel = st.columns(2)
                     if col_save.button("Salvar", key=f"salvar_{i}", use_container_width=True):
                         if novo_nome.strip():
@@ -603,7 +622,7 @@ def mostrar_pagina_gerenciar():
                                 st.rerun()
                         else:
                             st.error("O nome não pode estar vazio.")
-                    
+
                     if col_cancel.button("Cancelar", key=f"cancelar_{i}", use_container_width=True):
                         st.session_state.editing_id = None
                         st.rerun()
@@ -625,7 +644,7 @@ def mostrar_pagina_relatorios():
     st.markdown("Visualize o histórico de ponto, total de horas e baixe os arquivos.")
     df_pontos = data_manager.carregar_pontos()
     df_colab = data_manager.carregar_colaboradores()
-    
+
     if df_pontos.empty or df_colab.empty:
         st.warning("Sem dados suficientes para gerar relatórios.")
         return
@@ -646,7 +665,7 @@ def mostrar_pagina_relatorios():
     df_colab_filtrado = df_colab.copy()
     if funcao_selecionada != "Todas":
         df_colab_filtrado = df_colab[df_colab["Funcao"] == funcao_selecionada]
-    
+
     st.markdown("---")
 
     st.subheader("Quantitativo por Função")
@@ -656,58 +675,78 @@ def mostrar_pagina_relatorios():
         st.dataframe(contagem_funcao, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhum colaborador cadastrado para exibir o quantitativo.")
-    
+
     st.markdown("---")
 
-    st.subheader("Relatório de Faltas")
-    st.markdown("Exibe os dias úteis (Seg-Sex, exceto feriados) em que não houve registro de 'Entrada' para o colaborador no período selecionado.")
+    # --- INÍCIO DA SEÇÃO DE FALTAS MODIFICADA ---
+    st.subheader("Relatório de Faltas e Ausências")
+    st.markdown("Gerencie os dias em que não houve registro de 'Entrada' e justifique-os como atestado ou folga.")
 
-    colabs_normais = df_colab_filtrado[~df_colab_filtrado['Funcao'].str.contains("vigia", case=False, na=False)]
-    nomes_esperados_lista = ["Todos"] + sorted(colabs_normais['Nome'].unique().tolist())
-    
-    colab_falta_selecionado = st.selectbox(
-        "Filtrar por Colaborador:",
-        nomes_esperados_lista,
-        key="falta_colab_select"
-    )
-    
+    df_justificativas = data_manager.carregar_justificativas()
     faltas_encontradas = calcular_faltas(data_inicio, data_fim, df_colab_filtrado, df_pontos)
-
+    
     if not faltas_encontradas:
-        st.success("Nenhuma falta registrada para o período e filtro selecionados.")
+        st.success("Nenhuma falta ou ausência registrada para o período e filtro selecionados.")
     else:
-        if colab_falta_selecionado == "Todos":
-            st.error("Foram encontradas as seguintes faltas no período:")
-            for nome, datas_faltas in sorted(faltas_encontradas.items()):
-                with st.expander(f"**{nome}** - {len(datas_faltas)} falta(s)"):
-                    for data_falta in sorted(list(set(datas_faltas))):
-                        st.markdown(f"- {data_falta}")
-        else:
-            if colab_falta_selecionado in faltas_encontradas:
-                st.error(f"O colaborador **{colab_falta_selecionado}** faltou nos seguintes dias:")
-                datas_ausencia = sorted(list(set(faltas_encontradas[colab_falta_selecionado])))
-                for data_falta in datas_ausencia:
-                    st.markdown(f"- {data_falta}")
-            else:
-                st.success(f"Nenhuma falta encontrada para **{colab_falta_selecionado}** no período selecionado.")
+        st.error("Foram encontradas as seguintes ausências no período:")
+        for nome, datas_faltas in sorted(faltas_encontradas.items()):
+            with st.expander(f"**{nome}** - {len(datas_faltas)} ausência(s)"):
+                for data_falta_str in sorted(list(set(datas_faltas))):
+                    data_falta_dt = datetime.strptime(data_falta_str, '%Y-%m-%d')
+                    
+                    # Procura justificativa existente
+                    justificativa_existente = df_justificativas[
+                        (df_justificativas['Nome'] == nome) &
+                        (df_justificativas['Data'] == data_falta_str)
+                    ]
+                    status_atual = "Falta"
+                    if not justificativa_existente.empty:
+                        status_atual = justificativa_existente.iloc[0]['Status']
+                    
+                    # <<< ALTERAÇÃO AQUI >>>
+                    opcoes_status = ["Falta", "Atestado", "Folga", "Não Apto"]
+                    index_status = opcoes_status.index(status_atual) if status_atual in opcoes_status else 0
+                    
+                    col_data, col_status, col_save = st.columns([2, 3, 2])
+                    
+                    col_data.markdown(f"**Data:** {data_falta_dt.strftime('%d/%m/%Y')}")
+                    
+                    novo_status = col_status.selectbox(
+                        "Justificar como:",
+                        options=opcoes_status,
+                        index=index_status,
+                        key=f"status_{nome}_{data_falta_str}"
+                    )
+                    
+                    if col_save.button("Salvar", key=f"save_{nome}_{data_falta_str}", use_container_width=True):
+                        # Remover registro antigo, se existir
+                        df_justificativas = df_justificativas.drop(justificativa_existente.index)
+                        # Adicionar novo registro
+                        novo_registro = pd.DataFrame([[nome, data_falta_str, novo_status]], columns=["Nome", "Data", "Status"])
+                        df_justificativas = pd.concat([df_justificativas, novo_registro], ignore_index=True)
+                        
+                        data_manager.salvar_justificativas(df_justificativas)
+                        st.toast(f"Justificativa para {nome} em {data_falta_dt.strftime('%d/%m/%Y')} salva como '{novo_status}'.")
+                        st.rerun()
+    # --- FIM DA SEÇÃO DE FALTAS MODIFICADA ---
 
     st.subheader("Resumo Geral de Horas Extras no Período")
-    
+
     dados_horas_extras = []
     any_overtime_found = False
     for _, colaborador in df_colab_filtrado.iterrows():
         nome_colab = colaborador["Nome"]
         funcao_colab = colaborador["Funcao"]
-        
+
         if "vigia" in str(funcao_colab).lower():
             continue
 
         resultado_extras = calcular_horas_extras_cacheavel(
-            nome_colab, 
-            data_inicio.strftime('%Y-%m-%d'), 
+            nome_colab,
+            data_inicio.strftime('%Y-%m-%d'),
             data_fim.strftime('%Y-%m-%d')
         )
-        
+
         he_50_info = resultado_extras.get("50%", {"total": timedelta(), "datas": {}})
         he_100_info = resultado_extras.get("100%", {"total": timedelta(), "datas": {}})
 
@@ -718,7 +757,7 @@ def mostrar_pagina_relatorios():
                 "he_50": formatar_timedelta(he_50_info["total"]),
                 "he_100": formatar_timedelta(he_100_info["total"]),
             })
-            
+
             with st.container(border=True):
                 st.markdown(f"#### {nome_colab}")
                 col_he1, col_he2 = st.columns(2)
@@ -737,7 +776,7 @@ def mostrar_pagina_relatorios():
                                     'inicio_turno': reg_dict['inicio_turno'],
                                     'periodo': reg_dict['periodo']
                                 })
-                        
+
                         registros_sorted = sorted(registros_flat, key=lambda x: (x['data_evento'], x['inicio_turno']))
                         for reg in registros_sorted:
                             data_evento_str = reg['data_evento'].strftime('%d/%m/%Y')
@@ -760,7 +799,7 @@ def mostrar_pagina_relatorios():
                                     'inicio_turno': reg_dict['inicio_turno'],
                                     'periodo': reg_dict['periodo']
                                 })
-                        
+
                         registros_sorted = sorted(registros_flat, key=lambda x: (x['data_evento'], x['inicio_turno']))
                         for reg in registros_sorted:
                             data_evento_str = reg['data_evento'].strftime('%d/%m/%Y')
@@ -773,11 +812,11 @@ def mostrar_pagina_relatorios():
 
     if not any_overtime_found:
         st.info("Nenhum colaborador com horas extras encontradas no período para o filtro selecionado.")
-    
+
     if any_overtime_found:
         st.markdown("---")
         st.subheader("Gráfico Consolidado de Horas Extras")
-        
+
         df_he_grafico = pd.DataFrame(dados_horas_extras)
 
         def he_para_decimal(tempo_str):
@@ -786,12 +825,12 @@ def mostrar_pagina_relatorios():
                 return h + m / 60
             except:
                 return 0
-        
+
         df_he_grafico['HE 50% (horas)'] = df_he_grafico['he_50'].apply(he_para_decimal)
         df_he_grafico['HE 100% (horas)'] = df_he_grafico['he_100'].apply(he_para_decimal)
-        
+
         df_he_grafico.set_index('nome', inplace=True)
-        
+
         st.bar_chart(df_he_grafico[['HE 50% (horas)', 'HE 100% (horas)']])
         st.caption("Gráfico exibindo o total de horas extras (50% e 100%) por funcionário.")
 
@@ -799,19 +838,19 @@ def mostrar_pagina_relatorios():
     st.subheader("Análise Individual por Colaborador")
     # Usa a lista de nomes já filtrada pela função
     nomes_disponiveis = sorted(df_colab_filtrado["Nome"].unique().tolist())
-    
+
     if not nomes_disponiveis:
         st.warning("Nenhum colaborador encontrado para a função selecionada.")
         return
 
     colab_filtrado = st.selectbox("Selecionar colaborador:", nomes_disponiveis, key="relatorio_nome_total")
-    
+
     df_calculado_completo = calcular_horas(df_pontos[df_pontos["Nome"] == colab_filtrado])
     df_calculado = df_calculado_completo[
         (pd.to_datetime(df_calculado_completo["Data"]) >= pd.to_datetime(data_inicio)) &
         (pd.to_datetime(df_calculado_completo["Data"]) <= pd.to_datetime(data_fim))
     ]
-    
+
     if not df_calculado.empty:
         # ... (código da análise individual permanece o mesmo)
         st.write("**Total de Horas Trabalhadas**")
@@ -824,7 +863,7 @@ def mostrar_pagina_relatorios():
         horas_total = total_segundos // 3600
         minutos_total = (total_segundos % 3600) // 60
         st.success(f"Total de horas trabalhadas no período: {horas_total:02}:{minutos_total:02}")
-        
+
         st.markdown("---")
         st.write("**Cálculo de Horas Extras no Período**")
         funcao_colaborador = df_colab.loc[df_colab["Nome"] == colab_filtrado, "Funcao"].iloc[0]
@@ -833,20 +872,20 @@ def mostrar_pagina_relatorios():
         else:
             resultado_extras_individual = calcular_horas_extras_cacheavel(
                 colab_filtrado,
-                data_inicio.strftime('%Y-%m-%d'), 
+                data_inicio.strftime('%Y-%m-%d'),
                 data_fim.strftime('%Y-%m-%d')
             )
-            
+
             he_50_info = resultado_extras_individual.get("50%", {"total": timedelta(), "datas": {}})
             he_100_info = resultado_extras_individual.get("100%", {"total": timedelta(), "datas": {}})
-            
+
             col_he1, col_he2 = st.columns(2)
             col_he1.metric(label="Horas Extras (50%)", value=formatar_timedelta(he_50_info["total"]))
             col_he2.metric(label="Horas Extras (100%)", value=formatar_timedelta(he_100_info["total"]))
 
     else:
         st.info("Nenhum registro encontrado para o colaborador no período selecionado.")
-    
+
     st.markdown("---")
     st.subheader("Histórico Detalhado por Data")
     col_date, col_name_report = st.columns([1, 2])
@@ -856,17 +895,17 @@ def mostrar_pagina_relatorios():
         # Usa a lista de nomes já filtrada pela função
         nomes_relatorio = ["Todos"] + nomes_disponiveis
         colab_relatorio = st.selectbox("Filtrar por Colaborador:", nomes_relatorio, key="rel_colab_select")
-    
+
     df_dia = df_pontos[df_pontos["Data"] == data_relatorio.strftime("%Y-%m-%d")]
     if colab_relatorio != "Todos":
         df_dia = df_dia[df_dia["Nome"] == colab_relatorio]
-    
+
     st.write(f"Registros de Ponto para {data_relatorio.strftime('%d/%m/%Y')}:")
     if not df_dia.empty:
         st.dataframe(df_dia.sort_values(by=["Nome", "Hora"]), use_container_width=True)
     else:
         st.info("Nenhum registro encontrado para a data e filtro selecionados.")
-    
+
     st.markdown("---")
     st.subheader("Resumo de Horas Totais por Funcionário no Período")
     st.write(f"Exibindo o total de horas trabalhadas por cada funcionário entre **{data_inicio.strftime('%d/%m/%Y')}** e **{data_fim.strftime('%d/%m/%Y')}**.")
@@ -893,7 +932,7 @@ def mostrar_pagina_relatorios():
                     h, m = map(int, t.split(':'))
                     return (h * 3600) + (m * 60)
                 except (ValueError, TypeError): return 0
-            
+
             df_validas['Segundos'] = df_validas['Horas Trabalhadas'].apply(hms_to_seconds)
             resumo_segundos = df_validas.groupby('Nome')['Segundos'].sum().reset_index()
 
@@ -911,7 +950,7 @@ def mostrar_pagina_relatorios():
             try:
                 resumo_segundos['Horas Decimais'] = resumo_segundos['Segundos'] / 3600
                 df_grafico = resumo_segundos[['Nome', 'Horas Decimais']].set_index('Nome')
-                
+
                 st.bar_chart(df_grafico)
                 st.caption("Gráfico exibindo o total de horas trabalhadas (formato decimal) por funcionário.")
             except Exception as e:
@@ -920,83 +959,74 @@ def mostrar_pagina_relatorios():
             st.info("Nenhum registro de hora completo encontrado no período para gerar o resumo.")
     else:
         st.info("Nenhum registro de ponto encontrado no período para os filtros selecionados.")
-    
+
     st.markdown("---")
     st.subheader("Gerar Relatório para Diretoria")
     if st.session_state.get('role') == 'Admin':
-        # <<< INÍCIO DA MODIFICAÇÃO PARA O RELATÓRIO HTML >>>
-
-        # 1. Preparar a lista de colaboradores (baseada no filtro de função) para as diferentes seções
+        # --- PREPARAÇÃO DOS DADOS PARA O RELATÓRIO HTML ---
+        
+        # 1. Preparar lista de colaboradores do filtro
         df_colab_para_relatorio = df_colab_filtrado[['Nome', 'Funcao']].drop_duplicates().sort_values(by='Nome')
 
-        # 2. Preparar dados de Horas Extras para colaboradores ELEGÍVEIS (sem vigias)
+        # 2. Preparar dados de Horas Extras (sem vigias)
         dados_he_completos = []
         for index, row in df_colab_para_relatorio.iterrows():
             nome_colab = row['Nome']
             funcao_colab = row['Funcao']
-
-            # Adicionada a verificação para pular vigias APENAS para a seção de HE
             if "vigia" in str(funcao_colab).lower():
                 continue
-
             resultado_extras = calcular_horas_extras_cacheavel(
-                nome_colab,
-                data_inicio.strftime('%Y-%m-%d'),
-                data_fim.strftime('%Y-%m-%d')
+                nome_colab, data_inicio.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d')
             )
             he_50_info = resultado_extras.get("50%", {"total": timedelta(), "datas": {}})
             he_100_info = resultado_extras.get("100%", {"total": timedelta(), "datas": {}})
-
             dados_he_completos.append({
-                "nome": nome_colab,
-                "he_50": formatar_timedelta(he_50_info["total"]),
-                "he_100": formatar_timedelta(he_100_info["total"]),
+                "nome": nome_colab, "he_50": formatar_timedelta(he_50_info["total"]), "he_100": formatar_timedelta(he_100_info["total"])
             })
 
-        # 3. Preparar dados de Horas Totais para TODOS os colaboradores do filtro
-        # O df_pontos_periodo_resumo já foi filtrado corretamente acima na página
+        # 3. Preparar dados de Horas Totais para TODOS
         df_horas_diarias_html = calcular_horas(df_pontos_periodo_resumo.copy())
         df_validas_html = df_horas_diarias_html[df_horas_diarias_html['Horas Trabalhadas'] != 'Registro Incompleto'].copy()
-
         if not df_validas_html.empty:
             def hms_to_seconds_html(t):
-                try: 
-                    h, m = map(int, t.split(':'))
-                    return (h * 3600) + (m * 60)
-                except (ValueError, TypeError): 
-                    return 0
-            
+                try: h, m = map(int, t.split(':')); return (h * 3600) + (m * 60)
+                except (ValueError, TypeError): return 0
             df_validas_html['Segundos'] = df_validas_html['Horas Trabalhadas'].apply(hms_to_seconds_html)
             resumo_segundos_html = df_validas_html.groupby('Nome')['Segundos'].sum().reset_index()
-
             def seconds_to_hms_html(s):
-                s = int(s)
-                horas = s // 3600
-                minutos = (s % 3600) // 60
+                s = int(s); horas = s // 3600; minutos = (s % 3600) // 60
                 return f"{horas:02}:{minutos:02}"
-
             resumo_segundos_html['Total de Horas'] = resumo_segundos_html['Segundos'].apply(seconds_to_hms_html)
-            
-            # Faz um merge para garantir que todos os colaboradores estejam na tabela final
             df_resumo_final_html = pd.merge(
-                df_colab_para_relatorio[['Nome']], # Usa a lista completa de nomes do filtro
-                resumo_segundos_html[['Nome', 'Total de Horas']],
-                on='Nome',
-                how='left'
-            ).fillna({'Total de Horas': '00:00'}) # Preenche com '00:00' quem não teve horas
-
+                df_colab_para_relatorio[['Nome']], resumo_segundos_html[['Nome', 'Total de Horas']],
+                on='Nome', how='left'
+            ).fillna({'Total de Horas': '00:00'})
         else:
-            # Se não houver nenhum registro válido, cria um dataframe com todos os nomes e zero horas
             df_resumo_final_html = df_colab_para_relatorio[['Nome']].copy()
             df_resumo_final_html['Total de Horas'] = '00:00'
 
-        # 4. Gerar o relatório com os dados completos
+        # 4. (NOVO) Preparar dados de Faltas e Ausências com justificativas
+        dados_ausencias_completos = []
+        df_just_atual = data_manager.carregar_justificativas()
+        for nome, datas in sorted(faltas_encontradas.items()):
+            for data_str in sorted(list(set(datas))):
+                justificativa = df_just_atual[
+                    (df_just_atual['Nome'] == nome) & (df_just_atual['Data'] == data_str)
+                ]
+                status = justificativa.iloc[0]['Status'] if not justificativa.empty else "Falta"
+                dados_ausencias_completos.append({
+                    "nome": nome,
+                    "data": datetime.strptime(data_str, '%Y-%m-%d').strftime('%d/%m/%Y'),
+                    "status": status
+                })
+
+        # 5. Gerar o relatório HTML
         html_content = gerar_relatorio_html(
             data_inicio=data_inicio,
             data_fim=data_fim,
-            df_resumo_horas=df_resumo_final_html,   # <--- Usa o dataframe com TODOS os colaboradores
-            dados_he=dados_he_completos,           # <--- Usa a lista FILTRADA (sem vigias)
-            faltas=faltas_encontradas
+            df_resumo_horas=df_resumo_final_html,
+            dados_he=dados_he_completos,
+            ausencias=dados_ausencias_completos # Passa a lista completa de ausências
         )
         
         file_name = f"Relatorio_Diretoria_{data_inicio.strftime('%Y%m%d')}_{data_fim.strftime('%Y%m%d')}.html"
@@ -1011,8 +1041,6 @@ def mostrar_pagina_relatorios():
             mime='text/html',
             use_container_width=True
         )
-        
-        # <<< FIM DA MODIFICAÇÃO >>>
     else:
         st.info("A geração de relatórios para a diretoria está disponível apenas para administradores.")
 
@@ -1118,8 +1146,8 @@ def mostrar_pagina_ajuste():
     else:
         st.info("Selecione um colaborador e uma data para visualizar e ajustar os registros.")
 
-# ========== INÍCIO DA FUNÇÃO ATUALIZADA ==========
-def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_horas: pd.DataFrame, dados_he: list, faltas: dict):
+# ========== FUNÇÃO DE RELATÓRIO HTML ATUALIZADA ==========
+def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_horas: pd.DataFrame, dados_he: list, ausencias: list):
     """
     Gera um relatório consolidado em HTML, incluindo gráficos, com base nos dados fornecidos.
     Esta versão é otimizada para apresentação à diretoria.
@@ -1143,25 +1171,27 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
     he_50_data = [he_para_decimal(item['he_50']) for item in dados_he]
     he_100_data = [he_para_decimal(item['he_100']) for item in dados_he]
     
-    # --- ### ADIÇÃO 1: Cálculos para o Sumário Executivo ### ---
+    # --- Cálculos para o Sumário Executivo ---
     total_horas_trabalhadas_decimal = sum(chart_total_data)
     total_he50_decimal = sum(he_50_data)
     total_he100_decimal = sum(he_100_data)
-    total_faltas_registradas = sum(len(datas) for datas in faltas.values())
-    colaboradores_com_faltas = len(faltas)
+    
+    # MODIFICADO: Contagem de faltas e ausências justificadas
+    total_faltas = len([a for a in ausencias if a['status'] == 'Falta'])
+    # <<< ALTERAÇÃO AQUI >>>
+    total_ausencias_justificadas = len([a for a in ausencias if a['status'] in ['Atestado', 'Folga', 'Não Apto']])
+    colaboradores_com_faltas = len(set(a['nome'] for a in ausencias if a['status'] == 'Falta'))
 
     def decimal_para_hms(horas_decimais: float) -> str:
         horas = int(horas_decimais)
         minutos = int((horas_decimais * 60) % 60)
         return f"{horas:02}:{minutos:02}"
         
-    # --- ### NOVA ALTERAÇÃO: Calcular altura dinâmica dos gráficos ### ---
-    # Define uma altura mínima e adiciona 30px para cada colaborador para garantir espaço
+    # Calcular altura dinâmica dos gráficos
     chart_total_height = 120 + (len(chart_total_labels) * 30)
     chart_he_height = 120 + (len(he_nomes) * 30)
-    # --- FIM DA NOVA ALTERAÇÃO ---
 
-    # --- Estilo CSS (Adicionado estilo para o sumário) ---
+    # --- Estilo CSS ---
     html_style = """
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; }
@@ -1185,6 +1215,7 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
         .summary-card.he-50 { border-left-color: #ffc107; }
         .summary-card.he-100 { border-left-color: #dc3545; }
         .summary-card.faltas { border-left-color: #6c757d; }
+        .summary-card.justificadas { border-left-color: #198754; }
     </style>
     """
 
@@ -1193,19 +1224,20 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
     str_data_fim = data_fim.strftime('%d/%m/%Y')
     data_geracao = datetime.now().strftime('%d/%m/%Y às %H:%M:%S')
 
-    tabela_horas_html = df_resumo_horas[['Nome', 'Total de Horas']].to_html(index=False, classes="table", border=0) if not df_resumo_horas.empty else "<p>Não há registros de horas consolidadas para o período.</p>"
+    tabela_horas_html = df_resumo_horas[['Nome', 'Total de Horas']].to_html(index=False, classes="table", border=0) if not df_resumo_horas.empty else "<p>Não há registros de horas consolidadas.</p>"
     
     if not dados_he:
-        tabela_he_html = "<p>Nenhum registro de hora extra no período para os colaboradores analisados.</p>"
+        tabela_he_html = "<p>Nenhum registro de hora extra.</p>"
     else:
         he_rows = "".join([f"<tr><td>{item['nome']}</td><td>{item['he_50']}</td><td>{item['he_100']}</td></tr>" for item in dados_he])
         tabela_he_html = f"""<table class="table"><thead><tr><th>Colaborador</th><th>Horas Extras (50%)</th><th>Horas Extras (100%)</th></tr></thead><tbody>{he_rows}</tbody></table>"""
 
-    if not faltas:
-        tabela_faltas_html = "<p>Nenhuma falta registrada no período.</p>"
+    # MODIFICADO: Tabela de ausências agora inclui o status
+    if not ausencias:
+        tabela_faltas_html = "<p>Nenhuma falta ou ausência registrada no período.</p>"
     else:
-        faltas_rows = "".join([f"<tr><td>{nome}</td><td>{', '.join(sorted(list(set(datas))))}</td></tr>" for nome, datas in sorted(faltas.items())])
-        tabela_faltas_html = f"""<table class="table"><thead><tr><th>Colaborador</th><th>Datas das Faltas</th></tr></thead><tbody>{faltas_rows}</tbody></table>"""
+        ausencias_rows = "".join([f"<tr><td>{item['nome']}</td><td>{item['data']}</td><td>{item['status']}</td></tr>" for item in ausencias])
+        tabela_faltas_html = f"""<table class="table"><thead><tr><th>Colaborador</th><th>Data</th><th>Status</th></tr></thead><tbody>{ausencias_rows}</tbody></table>"""
 
     # --- Montagem do Corpo do HTML ---
     html_body = f"""
@@ -1223,7 +1255,8 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
                 <div class="summary-card"><h3>Total de Horas Trabalhadas</h3><p>{decimal_para_hms(total_horas_trabalhadas_decimal)}</p></div>
                 <div class="summary-card he-50"><h3>Total HE 50%</h3><p>{decimal_para_hms(total_he50_decimal)}</p></div>
                 <div class="summary-card he-100"><h3>Total HE 100%</h3><p>{decimal_para_hms(total_he100_decimal)}</p></div>
-                <div class="summary-card faltas"><h3>Total de Faltas</h3><p>{total_faltas_registradas} ({colaboradores_com_faltas} colab.)</p></div>
+                <div class="summary-card faltas"><h3>Faltas Não Justificadas</h3><p>{total_faltas} ({colaboradores_com_faltas} colab.)</p></div>
+                <div class="summary-card justificadas"><h3>Ausências Justificadas</h3><p>{total_ausencias_justificadas}</p></div>
             </div>
         </div>
 
@@ -1245,7 +1278,7 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
             <h3 style="margin-top: 25px;">Tabela 3.2: Horas Extras Apuradas</h3>
             {tabela_he_html}
             
-            <h3 style="margin-top: 25px;">Tabela 3.3: Relatório de Faltas</h3>
+            <h3 style="margin-top: 25px;">Tabela 3.3: Relatório de Faltas e Ausências</h3>
             {tabela_faltas_html}
         </div>
 
@@ -1258,9 +1291,7 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         const chartOptions = {{
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false, // <-- NOVA ALTERAÇÃO: Permite que o gráfico use a altura definida
+            indexAxis: 'y', responsive: true, maintainAspectRatio: false,
             plugins: {{ legend: {{ position: 'top' }}, title: {{ display: true, font: {{ size: 16 }} }} }},
             scales: {{ x: {{ beginAtZero: true, title: {{ display: true, text: 'Horas (formato decimal)' }} }} }}
         }};
@@ -1294,10 +1325,7 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
                 options: {{
                     ...chartOptions,
                     plugins: {{ ...chartOptions.plugins, title: {{ ...chartOptions.plugins.title, text: 'Gráfico 2.2: Horas Extras Consolidadas' }} }},
-                    scales: {{
-                        x: {{ ...chartOptions.scales.x, stacked: true }},
-                        y: {{ stacked: true }}
-                    }}
+                    scales: {{ x: {{ ...chartOptions.scales.x, stacked: true }}, y: {{ stacked: true }} }}
                 }}
             }});
         }}
@@ -1306,7 +1334,6 @@ def gerar_relatorio_html(data_inicio: datetime, data_fim: datetime, df_resumo_ho
     
     full_html = f"<!DOCTYPE html><html lang='pt-BR'><head><meta charset='UTF-8'><title>Relatório Gerencial - {str_data_inicio} a {str_data_fim}</title>{html_style}</head><body>{html_body}</body></html>"
     return full_html
-# ========== FIM DA FUNÇÃO ATUALIZADA ==========
 
 def mostrar_pagina_feriados():
     st.header("Gerenciar Feriados")
